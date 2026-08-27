@@ -35,6 +35,11 @@ yarn-error.log*
 .vercel
 
 /dist/
+/pages-dist/
 /.wrangler/
 /outputs/
 /work/
+
+# local handoff packages are not part of the hosted source
+/shareable-prototype/
+/*.zip
