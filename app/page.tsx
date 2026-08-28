@@ -40,7 +40,7 @@ export default function Home() {
     if (next.length === 4) window.setTimeout(() => setShowComplete(true), 550);
   }
   function reset() { setCollected([]); window.localStorage.removeItem("water-route-stamps"); setToast("已重置，可从第一站重新体验"); window.setTimeout(() => setToast(""), 2200); }
-  function savePostcard() { setToast("明信片已模拟保存到相册"); window.setTimeout(() => setToast(""), 2200); }
+  function savePostcard() { setToast("明信片已保存到相册"); window.setTimeout(() => setToast(""), 2200); }
 
   return <main className="site-shell">
     <section className="brief-panel" aria-label="原型说明">
@@ -51,7 +51,6 @@ export default function Home() {
     </section>
 
     <section className="phone-frame" aria-label="红旗渠数字集章小程序原型">
-      <div className="phone-status"><span>9:41</span><span>●●● ᯤ ▰</span></div>
       <header className="mini-header"><button aria-label="返回" className="icon-button">‹</button><div><strong>我是一滴漳河水</strong><span>太行引水 · 数字集章</span></div><button aria-label="更多" className="more-button">•••</button></header>
       <div className="map-scroll">
         <div className="hero-copy"><p>跟着漳河水，翻越太行</p><h2>把水引过太行山</h2><img className="hero-character" src="characters/front.png" alt="小水滴角色正面形象" /></div>
