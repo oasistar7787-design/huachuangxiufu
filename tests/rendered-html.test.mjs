@@ -12,17 +12,18 @@ async function render() {
   );
 }
 
-test("renders the Red Flag Canal NFC journey prototype", async () => {
+test("renders the garden-window transformation game", async () => {
   const response = await render();
   assert.equal(response.status, 200);
   assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
   const html = await response.text();
-  assert.match(html, /<title>我是一滴漳河水｜红旗渠 NFC 数字集章<\/title>/);
-  assert.match(html, /把水引过太行山/);
-  assert.match(html, /红旗渠分水闸/);
-  assert.match(html, /坎儿井复刻展陈/);
-  assert.match(html, /红旗渠曙光洞/);
-  assert.match(html, /红旗渠曙光渡槽/);
-  assert.match(html, /一碰打卡/);
+  assert.match(html, /<title>园林窗韵修复师｜图形变换拼图游戏<\/title>/);
+  assert.match(html, /园林窗韵修复师/);
+  assert.match(html, /修复工坊/);
+  assert.match(html, /修复指令/);
+  assert.match(html, /平移/);
+  assert.match(html, /旋转/);
+  assert.match(html, /轴对称/);
+  assert.match(html, /交点标记为 A 到 P/);
   assert.doesNotMatch(html, /codex-preview|Your site is taking shape/);
 });

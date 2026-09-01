@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "我是一滴漳河水｜红旗渠 NFC 数字集章",
-  description: "沿真实水路，完成分水、观井、穿山、越谷的红旗渠沉浸式数字集章体验。",
+  title: "园林窗韵修复师｜图形变换拼图游戏",
+  description: "在九宫格中用平移、旋转与轴对称修复一扇完整的圆形园林花窗。",
   icons: { icon: "/favicon.svg" },
 };
 

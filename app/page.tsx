@@ -1,80 +1,254 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 
-type Station = {
-  id: number; name: string; short: string; action: string; stampImage: string;
-  kicker: string; fact: string; story: string; position: string; postcard: string; character: string;
+type Mat = [[number, number], [number, number]];
+type PieceState = { x: number; y: number; matrix: Mat };
+type TranslateCommand = { id: number; type: "translate"; direction: "up" | "down" | "left" | "right"; distance: number };
+type RotateCommand = { id: number; type: "rotate"; center: string; direction: "cw" | "ccw"; angle: number };
+type ReflectCommand = { id: number; type: "reflect"; axis: string };
+type Command = TranslateCommand | RotateCommand | ReflectCommand;
+
+const POINTS = "ABCDEFGHIJKLMNOP".split("");
+const POINT_COORDS = Object.fromEntries(POINTS.map((p, i) => [p, { x: i % 4, y: Math.floor(i / 4) }]));
+const START: PieceState = { x: 2.5, y: 0.5, matrix: [[1, 0], [0, 1]] };
+const TARGET: PieceState = { x: 0.5, y: 2.5, matrix: [[0, 1], [1, 0]] };
+const AXES: Record<string, { label: string; apply: (p: PieceState) => PieceState }> = {
+  "BFJN": { label: "直线 BFJN（竖直）", apply: p => reflect(p, [[-1, 0], [0, 1]], 2, 0) },
+  "CGKO": { label: "直线 CGKO（竖直）", apply: p => reflect(p, [[-1, 0], [0, 1]], 4, 0) },
+  "EFGH": { label: "直线 EFGH（水平）", apply: p => reflect(p, [[1, 0], [0, -1]], 0, 2) },
+  "IJKL": { label: "直线 IJKL（水平）", apply: p => reflect(p, [[1, 0], [0, -1]], 0, 4) },
+  "AFKP": { label: "直线 AFKP（斜线）", apply: p => reflect(p, [[0, 1], [1, 0]], 0, 0, true) },
 };
 
-const stations: Station[] = [
-  { id: 1, name: "红旗渠分水闸", short: "分水调度", action: "回旋", stampImage: "stamps/01-fenshuizha.png", kicker: "第一站 · 水量调度心脏", fact: "总干渠来水在此分入一、二、三干渠，把漳河水送往村庄与农田。", story: "我是来自漳河的一滴小水，历经艰险翻越太行主脉，抵达红旗渠分水闸——整条干渠的水量调度心脏。当年红旗渠总干渠引水至此，林县人民修建这座分水枢纽，把从漳河远道而来的来水，按实际需求分配给一、二、三干渠。闸门起落，决定多少水流向村庄农田，化解南北区域用水矛盾。十万修渠人千辛万苦把我送过太行山，到这里才真正完成“分水润林州”的关键一步。我在闸前回旋，仿佛看见管护人员常年在此值守，观测水位、调节闸板，让每一滴水都物尽其用。告别总干渠，我顺着分支渠道散开，奔赴干涸的坡地村落，将太行之外的活水，送进世代盼雨的林县大地。", position: "station-one", postcard: "postcards/01-fenshuizha.png", character: "characters/01-fenshuizha.png" },
-  { id: 2, name: "坎儿井复刻展陈", short: "古今对话", action: "驻足", stampImage: "stamps/02-kanerjing.png", kicker: "第二站 · 一明一暗的治水智慧", fact: "红旗渠跨山引外水，坎儿井地下取潜流，两种抗旱智慧在这里相遇。", story: "顺着渠岸缓缓流淌，我驻足红旗渠园区内的坎儿井复刻展点。我奔流在太行山间露天石渠，而坎儿井，是西北大地独有的抗干旱创造。它不靠开山明渠，依靠竖井串联地下暗渠，深埋地下规避强日照蒸发，截取雪山地下水滋养戈壁绿洲。同样是向干旱宣战，红旗渠是跨山远距离引外来河水，坎儿井是就地取用地下潜流，一明一暗、一引一蓄，两套相隔千里的治水智慧在此相遇。站在展陈旁，我读懂，无论中原还是西北，不甘被旱魔困住的信念是相通的。我继续向前奔涌，更明白自己这翻山而来的流水，何其珍贵。", position: "station-two", postcard: "postcards/02-kanerjing.png", character: "characters/02-kanerjing.png" },
-  { id: 3, name: "红旗渠曙光洞", short: "穿山攻坚", action: "穿洞", stampImage: "stamps/03-shuguangdong.png", kicker: "第三站 · 穿透卢寨岭", fact: "34个竖井双向对打，建设者用钢钎铁锤凿出近四千米地下通道。", story: "重重太行山体横断前路，我涌入曙光洞，这是红旗渠全线最长的无压输水隧洞。当年修渠线路被巍峨的卢寨岭完全阻隔，绕路就要大量损失水位，工程队决定直接凿穿山体。工人们开挖34个竖井，从山体几十米深处双向对打，在不见日月的山腹之内，仅凭钢钎铁锤，历时两年多凿通这条近四千米的地下通道。没有大型掘进设备，全靠人力清渣运石，无数建设者在幽暗山腹中日夜劳作。我穿行于阴冷的隧洞内壁，岩壁留存着人工开凿的痕迹。曙光洞不只是简单山洞，它保住渠水水位，让我不用盘山绕远，直接穿透整座大山。", position: "station-three", postcard: "postcards/03-shuguangdong.png", character: "characters/03-shuguangdong.png" },
-  { id: 4, name: "红旗渠曙光渡槽", short: "凌空越谷", action: "飞跃", stampImage: "stamps/04-shuguangduqiao.png", kicker: "第四站 · 水上天桥", fact: "石砌渡槽横跨鲁家沟，保住水流落差，与曙光洞共同接续引水。", story: "穿出曙光洞，幽深宽阔的鲁家沟横挡去路，深谷切断渠身，我来到曙光渡槽。大山可以凿洞穿越，但宽阔深谷无法填埋，林县群众就地开山采石，肩挑背扛砌筑起这座空中石砌渡槽。整座渡槽横跨百米沟壑，把渠水抬升到高空，让我不用下到谷底再费力爬坡，保全水流落差，保障下游灌区供水。一块块粗粝青石，都是群众从山间开采搬运而来。我在高高的槽身之内平稳奔流，脚下是数十米深的山谷。隧洞解决“过山”难题，渡槽解决“越谷”难题。曙光洞打通山体，曙光渡槽飞越沟壑，一洞一槽接续配合，共同托举我越过太行重重天险，奔向更辽阔的田野。", position: "station-four", postcard: "postcards/04-shuguangduqiao.png", character: "characters/04-shuguangduqiao.png" },
-];
-
-function Drop({ mood = "smile", small = false }: { mood?: string; small?: boolean }) {
-  return <div className={`drop ${small ? "drop-small" : ""} mood-${mood}`} aria-hidden="true"><span className="drop-shine" /><span className="drop-face">{mood === "fly" ? "›ᴗ‹" : mood === "look" ? "•ᴗ•" : "˘ᴗ˘"}</span>{!small && <span className="drop-scarf" />}</div>;
+function multiply(a: Mat, b: Mat): Mat {
+  return [
+    [a[0][0] * b[0][0] + a[0][1] * b[1][0], a[0][0] * b[0][1] + a[0][1] * b[1][1]],
+    [a[1][0] * b[0][0] + a[1][1] * b[1][0], a[1][0] * b[0][1] + a[1][1] * b[1][1]],
+  ];
 }
 
-function Stamp({ station, active }: { station: Station; active: boolean }) {
-  return <div className={`stamp ${active ? "is-active" : ""}`} aria-label={`${station.name}${active ? "已点亮" : "未点亮"}`}><img src={station.stampImage} alt="" /><span className="stamp-status" aria-hidden="true">{active ? "✓" : station.id}</span></div>;
+function reflect(p: PieceState, matrix: Mat, offsetX: number, offsetY: number, swap = false): PieceState {
+  const x = swap ? p.y : matrix[0][0] * p.x + matrix[0][1] * p.y + offsetX;
+  const y = swap ? p.x : matrix[1][0] * p.x + matrix[1][1] * p.y + offsetY;
+  return { x, y, matrix: multiply(matrix, p.matrix) };
+}
+
+function applyCommand(p: PieceState, command: Command): PieceState {
+  if (command.type === "translate") {
+    const delta = {
+      up: [0, -command.distance], down: [0, command.distance],
+      left: [-command.distance, 0], right: [command.distance, 0],
+    }[command.direction];
+    return { ...p, x: p.x + delta[0], y: p.y + delta[1] };
+  }
+  if (command.type === "reflect") return AXES[command.axis].apply(p);
+  const center = POINT_COORDS[command.center];
+  const radians = command.angle * Math.PI / 180 * (command.direction === "cw" ? 1 : -1);
+  const cos = Math.round(Math.cos(radians));
+  const sin = Math.round(Math.sin(radians));
+  const rotation: Mat = [[cos, -sin], [sin, cos]];
+  const dx = p.x - center.x;
+  const dy = p.y - center.y;
+  return {
+    x: center.x + rotation[0][0] * dx + rotation[0][1] * dy,
+    y: center.y + rotation[1][0] * dx + rotation[1][1] * dy,
+    matrix: multiply(rotation, p.matrix),
+  };
+}
+
+function isTarget(p: PieceState) {
+  const close = (a: number, b: number) => Math.abs(a - b) < 0.01;
+  return close(p.x, TARGET.x) && close(p.y, TARGET.y) && p.matrix.flat().every((v, i) => close(v, TARGET.matrix.flat()[i]));
+}
+
+function commandCopy(command: Command) {
+  if (command.type === "translate") {
+    const names = { up: "向上", down: "向下", left: "向左", right: "向右" };
+    return { mark: "移", title: "平移", detail: `${names[command.direction]}${command.distance}格` };
+  }
+  if (command.type === "rotate") {
+    return { mark: "转", title: "旋转", detail: `以${command.center}为中心 · ${command.direction === "cw" ? "顺时针" : "逆时针"}${command.angle}°` };
+  }
+  return { mark: "对", title: "轴对称", detail: `沿${AXES[command.axis].label}` };
+}
+
+function WindowQuarter({ className = "", style, movable = false }: { className?: string; style?: React.CSSProperties; movable?: boolean }) {
+  return <div className={`quarter ${className}`} style={style} aria-hidden={!movable}>
+    <span className="lattice lattice-a" /><span className="lattice lattice-b" /><span className="lattice lattice-c" />
+  </div>;
 }
 
 export default function Home() {
-  const [collected, setCollected] = useState<number[]>([1]);
-  const [selected, setSelected] = useState<Station | null>(null);
-  const [nfcStation, setNfcStation] = useState<Station | null>(null);
-  const [showComplete, setShowComplete] = useState(false);
-  const [toast, setToast] = useState("");
+  const [commands, setCommands] = useState<Command[]>([]);
+  const [piece, setPiece] = useState<PieceState>(START);
+  const [direction, setDirection] = useState<TranslateCommand["direction"]>("down");
+  const [distance, setDistance] = useState(1);
+  const [center, setCenter] = useState("K");
+  const [rotationDirection, setRotationDirection] = useState<RotateCommand["direction"]>("ccw");
+  const [angle, setAngle] = useState(90);
+  const [axis, setAxis] = useState("IJKL");
+  const [running, setRunning] = useState(false);
+  const [success, setSuccess] = useState(false);
+  const [notice, setNotice] = useState("先编排指令，再一键执行修复");
+  const [showHint, setShowHint] = useState(false);
+  const boardRef = useRef<HTMLDivElement>(null);
+  const idRef = useRef(1);
 
-  useEffect(() => { const saved = window.localStorage.getItem("water-route-stamps"); if (saved) setCollected(JSON.parse(saved)); }, []);
-  const progress = Math.round((collected.length / stations.length) * 100);
-  const nextStation = useMemo(() => stations.find((station) => !collected.includes(station.id)) ?? stations[3], [collected]);
+  const mastery = useMemo(() => ({
+    translate: commands.some(c => c.type === "translate"),
+    rotate: commands.some(c => c.type === "rotate"),
+    reflect: commands.some(c => c.type === "reflect"),
+  }), [commands]);
 
-  function collect(station: Station) {
-    const next = Array.from(new Set([...collected, station.id])).sort();
-    setCollected(next); window.localStorage.setItem("water-route-stamps", JSON.stringify(next));
-    setNfcStation(null); setSelected(station);
-    if (next.length === 4) window.setTimeout(() => setShowComplete(true), 550);
+  function add(command: Omit<TranslateCommand, "id"> | Omit<RotateCommand, "id"> | Omit<ReflectCommand, "id">) {
+    if (commands.length >= 8) { setNotice("指令栏已满，请删减后再试"); return; }
+    setCommands(prev => [...prev, { ...command, id: idRef.current++ } as Command]);
+    setNotice("指令已加入队列");
   }
-  function reset() { setCollected([]); window.localStorage.removeItem("water-route-stamps"); setToast("已重置，可从第一站重新体验"); window.setTimeout(() => setToast(""), 2200); }
-  function savePostcard() { setToast("明信片已保存到相册"); window.setTimeout(() => setToast(""), 2200); }
 
-  return <main className="site-shell">
-    <section className="brief-panel" aria-label="原型说明">
-      <p className="eyebrow">RED FLAG CANAL · NFC JOURNEY</p><h1>我是一滴<br />漳河水</h1>
-      <p className="brief-lead">沿真实水路，完成一场“分水—观井—穿山—越谷”的沉浸式数字集章。</p><div className="brief-rule" />
-      <div className="brief-flow"><span>01 寻找水滴标识</span><i /><span>02 手机轻触 NFC</span><i /><span>03 阅读故事明信片</span><i /><span>04 点亮工程印章</span></div>
-      <div className="prototype-note"><span>交互原型</span><p>点击任一点位可看故事；点击底部“一碰打卡”模拟实地 NFC 触发。</p></div>
-    </section>
+  function remove(id: number) { setCommands(prev => prev.filter(c => c.id !== id)); }
+  function clear() { setCommands([]); setPiece(START); setSuccess(false); setNotice("已清空，花窗回到起点"); }
+  function undo() {
+    if (!commands.length) { setNotice("暂时没有可以撤销的指令"); return; }
+    setCommands(prev => prev.slice(0, -1)); setNotice("已撤销上一条指令");
+  }
 
-    <section className="phone-frame" aria-label="红旗渠数字集章小程序原型">
-      <header className="mini-header"><button aria-label="返回" className="icon-button">‹</button><div><strong>我是一滴漳河水</strong><span>太行引水 · 数字集章</span></div><button aria-label="更多" className="more-button">•••</button></header>
-      <div className="map-scroll">
-        <div className="hero-copy"><p>跟着漳河水，翻越太行</p><h2>把水引过太行山</h2><img className="hero-character" src="characters/front.png" alt="小水滴角色正面形象" /></div>
-        <div className="progress-card">
-          <div className="progress-top"><div><b>{collected.length}</b><span>/ 4 枚印章</span></div><span>{collected.length === 4 ? "旅程已完成" : `下一站 · ${nextStation.short}`}</span></div>
-          <div className="progress-track"><i style={{ width: `${progress}%` }} /></div>
-          <div className="stamp-row">{stations.map((station) => <Stamp key={station.id} station={station} active={collected.includes(station.id)} />)}</div>
+  function run() {
+    if (!commands.length || running) { if (!commands.length) setNotice("请先从右侧添加修复指令"); return; }
+    setRunning(true); setSuccess(false); setPiece(START); setNotice("正在依次执行修复指令…");
+    let working = START;
+    commands.forEach((command, index) => {
+      working = applyCommand(working, command);
+      const next = working;
+      window.setTimeout(() => {
+        setPiece(next);
+        if (index === commands.length - 1) {
+          const allUsed = mastery.translate && mastery.rotate && mastery.reflect;
+          window.setTimeout(() => {
+            setRunning(false);
+            if (isTarget(next) && allUsed) { setSuccess(true); setNotice("修复成功！三种图形变换全部掌握"); }
+            else if (isTarget(next)) setNotice("位置正确！再用齐平移、旋转和轴对称三枚修复章");
+            else setNotice("还差一点：观察残片的位置和朝向，再调整指令");
+          }, 450);
+        }
+      }, 180 + index * 620);
+    });
+  }
+
+  function dragPiece(event: React.PointerEvent<HTMLButtonElement>) {
+    if (running || !boardRef.current) return;
+    event.currentTarget.setPointerCapture(event.pointerId);
+    setNotice("可拖动观察位置；执行指令时会从右上角重新出发");
+  }
+
+  function movePiece(event: React.PointerEvent<HTMLButtonElement>) {
+    if (!event.currentTarget.hasPointerCapture(event.pointerId) || !boardRef.current) return;
+    const rect = boardRef.current.getBoundingClientRect();
+    const cell = rect.width / 3;
+    const x = Math.max(.5, Math.min(2.5, Math.round((event.clientX - rect.left) / cell - .5) + .5));
+    const y = Math.max(.5, Math.min(2.5, Math.round((event.clientY - rect.top) / cell - .5) + .5));
+    setPiece(prev => ({ ...prev, x, y }));
+  }
+
+  const cssMatrix = `matrix(${piece.matrix[0][0]},${piece.matrix[1][0]},${piece.matrix[0][1]},${piece.matrix[1][1]},0,0)`;
+
+  return (
+    <main className="game-shell">
+      <header className="game-header">
+        <div className="brand-mark">窗</div>
+        <div className="brand-copy"><p>TRANSFORMATION WORKSHOP</p><h1>园林窗韵修复师</h1></div>
+        <div className="mission-pill"><span>第 1 关</span>月洞寻韵</div>
+        <button className="help-button" onClick={() => setShowHint(v => !v)} aria-expanded={showHint}>？<span>修复提示</span></button>
+      </header>
+
+      {showHint && <div className="hint-strip" role="note"><b>匠人手记</b><span>试试：向下 1 格 → 以 K 为中心逆时针旋转 90° → 沿 IJKL 轴对称 → 向左 1 格</span><button onClick={() => setShowHint(false)}>收起</button></div>}
+
+      <section className="game-layout">
+        <article className="panel board-panel">
+          <div className="panel-heading"><span>01</span><div><h2>修复工坊</h2><p>把右上角残片送回左下空位</p></div><div className="grid-chip">3 × 3</div></div>
+          <div className="board-wrap">
+            <div className="board" ref={boardRef} aria-label="3×3 花窗拼图网格，交点标记为 A 到 P">
+              {Array.from({ length: 9 }, (_, i) => <div className="cell" key={i}><span>{i + 1}</span></div>)}
+              <WindowQuarter className="fixed q-tl" /><WindowQuarter className="fixed q-tr" /><WindowQuarter className="fixed q-br" />
+              <div className="target-slot"><span>缺口</span></div>
+              <button
+                className="movable-wrap"
+                style={{ left: `${(piece.x - .5) * 33.333}%`, top: `${(piece.y - .5) * 33.333}%`, transform: cssMatrix }}
+                onPointerDown={dragPiece} onPointerMove={movePiece} aria-label="可拖动的四分之一花窗残片"
+              ><WindowQuarter className="movable" movable /><i>拖动观察</i></button>
+              {POINTS.map((point, i) => <span key={point} className="point-label" style={{ left: `${(i % 4) * 33.333}%`, top: `${Math.floor(i / 4) * 33.333}%` }}>{point}</span>)}
+              {running && <div className="running-glow" />}
+            </div>
+          </div>
+          <div className="board-status"><span className={running ? "pulse-dot" : ""} />{notice}</div>
+          <div className="board-actions"><button className="run" onClick={run} disabled={running}>▶ {running ? "修复中…" : "执行修复"}</button><button onClick={undo}>↶ 撤销一步</button><button onClick={clear}>↻ 重新开始</button></div>
+        </article>
+
+        <article className="panel queue-panel">
+          <div className="panel-heading"><span>02</span><div><h2>修复指令</h2><p>按顺序编排图形运动</p></div><b>{commands.length} / 8</b></div>
+          <div className="mastery-row">
+            <span className={mastery.translate ? "earned" : ""}>✓ 平移</span>
+            <span className={mastery.rotate ? "earned" : ""}>✓ 旋转</span>
+            <span className={mastery.reflect ? "earned" : ""}>✓ 轴对称</span>
+          </div>
+          {commands.length === 0 ? <div className="empty-queue"><div>+</div><strong>还没有修复指令</strong><p>从右侧选择要素，加入运动序列</p></div> :
+            <ol className="command-list">{commands.map((command, index) => {
+              const copy = commandCopy(command);
+              return <li key={command.id} className={command.type}>
+                <span className="command-number">{String(index + 1).padStart(2, "0")}</span>
+                <span className="command-mark">{copy.mark}</span>
+                <div><strong>{copy.title}</strong><p>{copy.detail}</p></div>
+                <button onClick={() => remove(command.id)} aria-label={`删除第${index + 1}条指令`}>×</button>
+              </li>;
+            })}</ol>}
+          <div className="queue-foot"><span>指令会自上而下依次执行</span><button onClick={() => setCommands([])}>清空队列</button></div>
+        </article>
+
+        <aside className="panel tools-panel">
+          <div className="panel-heading"><span>03</span><div><h2>变换工具</h2><p>补全每种变换的关键要素</p></div></div>
+
+          <section className="tool-card translate">
+            <header><span>↗</span><div><h3>平移</h3><p><b>方向</b> + <b>距离</b></p></div></header>
+            <label>选择方向</label>
+            <div className="choice-row direction-grid">
+              {([["up", "↑ 上"], ["down", "↓ 下"], ["left", "← 左"], ["right", "→ 右"]] as const).map(([value, label]) => <button key={value} className={direction === value ? "active" : ""} onClick={() => setDirection(value)}>{label}</button>)}
+            </div>
+            <label>移动距离</label>
+            <div className="choice-row">{[1, 2, 3].map(n => <button key={n} className={distance === n ? "active" : ""} onClick={() => setDistance(n)}>{n} 格</button>)}</div>
+            <button className="add-command" onClick={() => add({ type: "translate", direction, distance })}>＋ 加入平移指令</button>
+          </section>
+
+          <section className="tool-card rotate">
+            <header><span>↻</span><div><h3>旋转</h3><p><b>旋转中心</b> + <b>方向</b> + <b>角度</b></p></div></header>
+            <label htmlFor="center-select">旋转中心</label>
+            <select id="center-select" value={center} onChange={e => setCenter(e.target.value)}>{POINTS.map(p => <option key={p} value={p}>交点 {p}</option>)}</select>
+            <div className="two-columns">
+              <div><label>旋转方向</label><div className="choice-row"><button className={rotationDirection === "cw" ? "active" : ""} onClick={() => setRotationDirection("cw")}>↻ 顺时针</button><button className={rotationDirection === "ccw" ? "active" : ""} onClick={() => setRotationDirection("ccw")}>↺ 逆时针</button></div></div>
+              <div><label>旋转角度</label><div className="choice-row">{[90, 180, 270].map(n => <button key={n} className={angle === n ? "active" : ""} onClick={() => setAngle(n)}>{n}°</button>)}</div></div>
+            </div>
+            <button className="add-command" onClick={() => add({ type: "rotate", center, direction: rotationDirection, angle })}>＋ 加入旋转指令</button>
+          </section>
+
+          <section className="tool-card reflect">
+            <header><span>◇</span><div><h3>轴对称</h3><p>沿着<b>哪条对称轴</b></p></div></header>
+            <label htmlFor="axis-select">选择对称轴</label>
+            <select id="axis-select" value={axis} onChange={e => setAxis(e.target.value)}>{Object.entries(AXES).map(([value, item]) => <option key={value} value={value}>{item.label}</option>)}</select>
+            <div className="axis-preview"><span className={axis === "IJKL" || axis === "EFGH" ? "horizontal" : axis === "AFKP" ? "diagonal" : ""} /><small>{AXES[axis].label}</small></div>
+            <button className="add-command" onClick={() => add({ type: "reflect", axis })}>＋ 加入轴对称指令</button>
+          </section>
+        </aside>
+      </section>
+
+      {success && <div className="success-overlay" role="dialog" aria-modal="true" aria-label="修复成功">
+        <div className="success-card">
+          <span className="success-seal">修</span><p>WINDOW RESTORED</p><h2>一窗一景，修复完成</h2>
+          <div className="mini-window"><WindowQuarter className="mini-tl" /><WindowQuarter className="mini-tr" /><WindowQuarter className="mini-bl" /><WindowQuarter className="mini-br" /></div>
+          <p className="success-copy">你准确运用了平移、旋转和轴对称，<br />让残缺的花窗重新合圆。</p>
+          <div className="success-badges"><span>平移章</span><span>旋转章</span><span>对称章</span></div>
+          <button onClick={() => { setSuccess(false); clear(); }}>再修一次</button>
         </div>
-        <div className="route-map">
-          <img className="point-map" src="route-map.jpg" alt="红旗渠四个 NFC 打卡点位及游览路线图" />
-          <div className="route-tip">点击点位查看故事明信片</div>
-          {stations.map((station) => { const done = collected.includes(station.id); return <button className={"map-hotspot hotspot-" + station.id + (done ? " is-done" : "")} key={station.id} onClick={() => setSelected(station)} aria-label={"查看" + station.name}><span>{done ? "✓" : ""}</span></button>; })}
-        </div>
-      </div>
-      <nav className="bottom-bar" aria-label="主要操作"><button className="nav-item is-current"><span>⌁</span>水路</button><button className="nfc-button" onClick={() => setNfcStation(nextStation)}><span className="nfc-waves">)))</span><b>一碰打卡</b></button><button className="nav-item" onClick={() => setShowComplete(true)}><span>✺</span>我的章</button></nav>
-    </section>
-
-    <aside className="asset-panel"><div><span className="asset-number">4</span><p>个真实工程点位</p></div><ul><li><b>核心结构</b><span>路线总览 / NFC 触发 / 明信片 / 集章完成</span></li><li><b>故事节奏</b><span>回旋 → 驻足 → 穿洞 → 飞跃</span></li><li><b>视觉基调</b><span>太行石青、漳河蓝、邮戳朱红</span></li></ul><button onClick={reset}>重置演示进度 ↺</button></aside>
-
-    {nfcStation && <div className="overlay nfc-overlay" role="dialog" aria-modal="true" aria-label="NFC 打卡模拟"><button className="overlay-close" onClick={() => setNfcStation(null)}>×</button><div className="nfc-scene"><span className="nfc-ring ring-one" /><span className="nfc-ring ring-two" /><img className="nfc-character" src={nfcStation.character} alt={`${nfcStation.name}小水滴角色`} /></div><p className="eyebrow">NFC NEAR FIELD JOURNEY</p><h3>找到我啦！</h3><p>你已抵达「{nfcStation.name}」<br />让我们继续顺水前行。</p><button className="primary-button" onClick={() => collect(nfcStation)}>开启水滴故事</button><small>原型中点击按钮模拟手机触碰 NFC 标签</small></div>}
-
-    {selected && <div className="overlay postcard-overlay" role="dialog" aria-modal="true" aria-label={`${selected.name}明信片`}><button className="overlay-close dark postcard-close" onClick={() => setSelected(null)}>×</button><div className="postcard-image"><img src={selected.postcard} alt={`${selected.name}主题明信片`} /></div><div className="postcard-content"><p className="postcard-kicker">{selected.kicker}</p><h3>{selected.name}</h3><p className="fact-line">{selected.fact}</p><p className="story-copy">{selected.story}</p><div className="postcard-actions">{!collected.includes(selected.id) && <button className="primary-button" onClick={() => collect(selected)}>点亮这枚印章</button>}{collected.includes(selected.id) && <button className="primary-button" onClick={savePostcard}>保存故事明信片</button>}<button className="text-button" onClick={() => setSelected(null)}>返回水路</button></div></div></div>}
-
-    {showComplete && <div className="overlay complete-overlay" role="dialog" aria-modal="true" aria-label="集章进度"><button className="overlay-close" onClick={() => setShowComplete(false)}>×</button><p className="eyebrow">MY WATER JOURNEY</p><h3>{collected.length === 4 ? "我把水引过了太行山" : "我的引水旅程"}</h3><p>{collected.length === 4 ? "一洞一槽，一渠清水。四段治水故事已全部珍藏。" : `已点亮 ${collected.length} 枚印章，还有 ${4 - collected.length} 站等待出发。`}</p><div className="complete-stamps">{stations.map((station) => <Stamp key={station.id} station={station} active={collected.includes(station.id)} />)}</div><div className="share-card"><img className="share-character" src="characters/front.png" alt="小水滴角色正面形象" /><span>红旗渠研学纪念</span><b>{progress}%</b><em>把水引过太行山</em></div><button className="primary-button" onClick={savePostcard}>{collected.length === 4 ? "保存集章海报" : "保存当前进度"}</button></div>}
-    {toast && <div className="toast" role="status">{toast}</div>}
-  </main>;
+      </div>}
+    </main>
+  );
 }
