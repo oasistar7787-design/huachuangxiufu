@@ -1,25 +1,57 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 type Mat = [[number, number], [number, number]];
 type PieceState = { x: number; y: number; matrix: Mat };
-type TranslateCommand = { id: number; type: "translate"; direction: "up" | "down" | "left" | "right"; distance: number };
-type RotateCommand = { id: number; type: "rotate"; center: string; direction: "cw" | "ccw"; angle: number };
-type ReflectCommand = { id: number; type: "reflect"; axis: string };
-type Command = TranslateCommand | RotateCommand | ReflectCommand;
+type Direction = "up" | "down" | "left" | "right";
+type RotationDirection = "cw" | "ccw";
+type ActionType = "translate" | "rotate" | "reflect";
+type SlotField = "direction" | "distance" | "center" | "rotationDirection" | "angle" | "axis";
 
-const POINTS = "ABCDEFGHIJKLMNOP".split("");
-const POINT_COORDS = Object.fromEntries(POINTS.map((p, i) => [p, { x: i % 4, y: Math.floor(i / 4) }]));
-const START: PieceState = { x: 2.5, y: 0.5, matrix: [[1, 0], [0, 1]] };
-const TARGET: PieceState = { x: 0.5, y: 2.5, matrix: [[0, 1], [1, 0]] };
-const AXES: Record<string, { label: string; apply: (p: PieceState) => PieceState }> = {
-  "BFJN": { label: "直线 BFJN（竖直）", apply: p => reflect(p, [[-1, 0], [0, 1]], 2, 0) },
-  "CGKO": { label: "直线 CGKO（竖直）", apply: p => reflect(p, [[-1, 0], [0, 1]], 4, 0) },
-  "EFGH": { label: "直线 EFGH（水平）", apply: p => reflect(p, [[1, 0], [0, -1]], 0, 2) },
-  "IJKL": { label: "直线 IJKL（水平）", apply: p => reflect(p, [[1, 0], [0, -1]], 0, 4) },
-  "AFKP": { label: "直线 AFKP（斜线）", apply: p => reflect(p, [[0, 1], [1, 0]], 0, 0, true) },
+type DraftInstruction = {
+  id: number;
+  type: ActionType;
+  direction?: Direction;
+  distance?: number;
+  center?: string;
+  rotationDirection?: RotationDirection;
+  angle?: number;
+  axis?: string;
 };
+
+type ParameterPayload =
+  | { kind: "action"; value: ActionType; label: string }
+  | { kind: "translate-direction"; value: Direction; label: string }
+  | { kind: "step"; value: number; label: string }
+  | { kind: "rotation-direction"; value: RotationDirection; label: string }
+  | { kind: "angle"; value: number; label: string }
+  | { kind: "point"; value: string; label: string }
+  | { kind: "axis"; value: string; label: string };
+
+type Command =
+  | { type: "translate"; direction: Direction; distance: number }
+  | { type: "rotate"; center: string; direction: RotationDirection; angle: number }
+  | { type: "reflect"; axisPoints: [string, string] };
+
+type ResultFeedback = { type: "success" | "error"; title: string; message: string };
+type DragGhost = { payload: ParameterPayload; x: number; y: number; sourceX: number; sourceY: number; returning: boolean };
+
+const FIXED_POINTS = [
+  { name: "C", x: 0, y: 0 }, { name: "F", x: 1, y: 0 }, { name: "M", x: 2, y: 0 }, { name: "N", x: 3, y: 0 },
+  { name: "B", x: 0, y: 1 }, { name: "E", x: 1, y: 1 }, { name: "H", x: 2, y: 1 }, { name: "P", x: 3, y: 1 },
+  { name: "A", x: 0, y: 2 }, { name: "D", x: 1, y: 2 }, { name: "G", x: 2, y: 2 },
+] as const;
+const ROTATION_POINTS = "ABCDEFGHMNPO".split("");
+const SYMMETRY_AXES = ["MH", "FE", "EH", "ED", "BE", "HG", "FH", "EG", "BD", "DG", "HP", "AD"];
+const POINT_COORDS: Record<string, { x: number; y: number }> = Object.fromEntries(FIXED_POINTS.map(point => [point.name, { x: point.x, y: point.y }]));
+const START: PieceState = { x: 2.5, y: 0.5, matrix: [[1, 0], [0, 1]] };
+const TARGET: PieceState = { x: 0.5, y: 1.5, matrix: [[-1, 0], [0, 1]] };
+const ACTION_META = {
+  translate: { title: "平移", icon: "↗", hint: "方向 + 步数" },
+  rotate: { title: "旋转", icon: "↻", hint: "中心 + 方向 + 角度" },
+  reflect: { title: "轴对称", icon: "◇", hint: "选择一条对称轴" },
+} satisfies Record<ActionType, { title: string; icon: string; hint: string }>;
 
 function multiply(a: Mat, b: Mat): Mat {
   return [
@@ -28,227 +60,412 @@ function multiply(a: Mat, b: Mat): Mat {
   ];
 }
 
-function reflect(p: PieceState, matrix: Mat, offsetX: number, offsetY: number, swap = false): PieceState {
-  const x = swap ? p.y : matrix[0][0] * p.x + matrix[0][1] * p.y + offsetX;
-  const y = swap ? p.x : matrix[1][0] * p.x + matrix[1][1] * p.y + offsetY;
-  return { x, y, matrix: multiply(matrix, p.matrix) };
+function reflectAcrossLine(piece: PieceState, names: [string, string]): PieceState {
+  const a = POINT_COORDS[names[0]];
+  const b = POINT_COORDS[names[1]];
+  if (!a || !b || (a.x === b.x && a.y === b.y)) return piece;
+  const length = Math.hypot(b.x - a.x, b.y - a.y);
+  const ux = (b.x - a.x) / length;
+  const uy = (b.y - a.y) / length;
+  const reflection: Mat = [[ux * ux - uy * uy, 2 * ux * uy], [2 * ux * uy, uy * uy - ux * ux]];
+  const dx = piece.x - a.x;
+  const dy = piece.y - a.y;
+  return {
+    x: a.x + reflection[0][0] * dx + reflection[0][1] * dy,
+    y: a.y + reflection[1][0] * dx + reflection[1][1] * dy,
+    matrix: multiply(reflection, piece.matrix),
+  };
 }
 
-function applyCommand(p: PieceState, command: Command): PieceState {
+function applyCommand(piece: PieceState, command: Command): PieceState {
   if (command.type === "translate") {
     const delta = {
       up: [0, -command.distance], down: [0, command.distance],
       left: [-command.distance, 0], right: [command.distance, 0],
     }[command.direction];
-    return { ...p, x: p.x + delta[0], y: p.y + delta[1] };
+    return { ...piece, x: piece.x + delta[0], y: piece.y + delta[1] };
   }
-  if (command.type === "reflect") return AXES[command.axis].apply(p);
-  const center = POINT_COORDS[command.center];
+  if (command.type === "reflect") return reflectAcrossLine(piece, command.axisPoints);
+  const center = command.center === "O" ? { x: piece.x, y: piece.y } : POINT_COORDS[command.center];
+  if (!center) return piece;
   const radians = command.angle * Math.PI / 180 * (command.direction === "cw" ? 1 : -1);
   const cos = Math.round(Math.cos(radians));
   const sin = Math.round(Math.sin(radians));
   const rotation: Mat = [[cos, -sin], [sin, cos]];
-  const dx = p.x - center.x;
-  const dy = p.y - center.y;
+  const dx = piece.x - center.x;
+  const dy = piece.y - center.y;
   return {
     x: center.x + rotation[0][0] * dx + rotation[0][1] * dy,
     y: center.y + rotation[1][0] * dx + rotation[1][1] * dy,
-    matrix: multiply(rotation, p.matrix),
+    matrix: multiply(rotation, piece.matrix),
   };
 }
 
-function isTarget(p: PieceState) {
+function toCommand(draft: DraftInstruction): Command | null {
+  if (draft.type === "translate" && draft.direction && draft.distance) {
+    return { type: "translate", direction: draft.direction, distance: draft.distance };
+  }
+  if (draft.type === "rotate" && draft.center && draft.rotationDirection && draft.angle) {
+    return { type: "rotate", center: draft.center, direction: draft.rotationDirection, angle: draft.angle };
+  }
+  if (draft.type === "reflect" && draft.axis) {
+    return { type: "reflect", axisPoints: [draft.axis[0], draft.axis[1]] };
+  }
+  return null;
+}
+
+function isTarget(piece: PieceState) {
   const close = (a: number, b: number) => Math.abs(a - b) < 0.01;
-  return close(p.x, TARGET.x) && close(p.y, TARGET.y) && p.matrix.flat().every((v, i) => close(v, TARGET.matrix.flat()[i]));
+  return close(piece.x, TARGET.x) && close(piece.y, TARGET.y)
+    && piece.matrix.flat().every((value, index) => close(value, TARGET.matrix.flat()[index]));
 }
 
-function commandCopy(command: Command) {
-  if (command.type === "translate") {
-    const names = { up: "向上", down: "向下", left: "向左", right: "向右" };
-    return { mark: "移", title: "平移", detail: `${names[command.direction]}${command.distance}格` };
-  }
-  if (command.type === "rotate") {
-    return { mark: "转", title: "旋转", detail: `以${command.center}为中心 · ${command.direction === "cw" ? "顺时针" : "逆时针"}${command.angle}°` };
-  }
-  return { mark: "对", title: "轴对称", detail: `沿${AXES[command.axis].label}` };
+function isInsideGrid(piece: PieceState) {
+  const epsilon = 0.01;
+  return piece.x >= 0.5 - epsilon && piece.x <= 2.5 + epsilon
+    && piece.y >= 0.5 - epsilon && piece.y <= 2.5 + epsilon;
 }
 
-function WindowQuarter({ className = "", style, movable = false }: { className?: string; style?: React.CSSProperties; movable?: boolean }) {
-  return <div className={`quarter ${className}`} style={style} aria-hidden={!movable}>
-    <span className="lattice lattice-a" /><span className="lattice lattice-b" /><span className="lattice lattice-c" />
+function WindowQuarter({ className = "", movable = false }: { className?: string; movable?: boolean }) {
+  return <div className={`quarter ${className}`} aria-hidden={!movable}>
+    <img src="/window-quarter-reference.png" alt="" draggable={false} />
   </div>;
 }
 
 export default function Home() {
-  const [commands, setCommands] = useState<Command[]>([]);
+  const [instructions, setInstructions] = useState<DraftInstruction[]>([]);
   const [piece, setPiece] = useState<PieceState>(START);
-  const [direction, setDirection] = useState<TranslateCommand["direction"]>("down");
-  const [distance, setDistance] = useState(1);
-  const [center, setCenter] = useState("K");
-  const [rotationDirection, setRotationDirection] = useState<RotateCommand["direction"]>("ccw");
-  const [angle, setAngle] = useState(90);
-  const [axis, setAxis] = useState("IJKL");
+  const [activeSlot, setActiveSlot] = useState<{ id: number; field: SlotField } | null>(null);
+  const [dragging, setDragging] = useState<ParameterPayload | null>(null);
   const [running, setRunning] = useState(false);
-  const [success, setSuccess] = useState(false);
-  const [notice, setNotice] = useState("先编排指令，再一键执行修复");
+  const [feedback, setFeedback] = useState<ResultFeedback | null>(null);
+  const [dragGhost, setDragGhost] = useState<DragGhost | null>(null);
+  const [notice, setNotice] = useState("先把一种动作拖到中间，再把右侧参数拖进空格");
   const [showHint, setShowHint] = useState(false);
-  const boardRef = useRef<HTMLDivElement>(null);
+  const activeDragRef = useRef<ParameterPayload | null>(null);
+  const pointerDragRef = useRef<{ payload: ParameterPayload; pointerId: number; startX: number; startY: number; moved: boolean; sourceX: number; sourceY: number } | null>(null);
+  const suppressClickRef = useRef(false);
   const idRef = useRef(1);
 
+  const completeCount = useMemo(() => instructions.filter(instruction => toCommand(instruction)).length, [instructions]);
   const mastery = useMemo(() => ({
-    translate: commands.some(c => c.type === "translate"),
-    rotate: commands.some(c => c.type === "rotate"),
-    reflect: commands.some(c => c.type === "reflect"),
-  }), [commands]);
+    translate: instructions.some(item => item.type === "translate" && toCommand(item)),
+    rotate: instructions.some(item => item.type === "rotate" && toCommand(item)),
+    reflect: instructions.some(item => item.type === "reflect" && toCommand(item)),
+  }), [instructions]);
 
-  function add(command: Omit<TranslateCommand, "id"> | Omit<RotateCommand, "id"> | Omit<ReflectCommand, "id">) {
-    if (commands.length >= 8) { setNotice("指令栏已满，请删减后再试"); return; }
-    setCommands(prev => [...prev, { ...command, id: idRef.current++ } as Command]);
-    setNotice("指令已加入队列");
+  useEffect(() => {
+    if (!dragging) return;
+    const moveAcrossPage = (event: PointerEvent) => {
+      const current = pointerDragRef.current;
+      if (!current || current.pointerId !== event.pointerId) return;
+      if (Math.hypot(event.clientX - current.startX, event.clientY - current.startY) > 4) current.moved = true;
+      if (current.moved) event.preventDefault();
+      setDragGhost(previous => previous ? { ...previous, x: event.clientX, y: event.clientY, returning: false } : previous);
+    };
+    const finishAcrossPage = (event: PointerEvent) => finishCopyDragAt(event.clientX, event.clientY, event.pointerId);
+    window.addEventListener("pointermove", moveAcrossPage, { capture: true, passive: false });
+    window.addEventListener("pointerup", finishAcrossPage, true);
+    window.addEventListener("pointercancel", finishAcrossPage, true);
+    return () => {
+      window.removeEventListener("pointermove", moveAcrossPage, true);
+      window.removeEventListener("pointerup", finishAcrossPage, true);
+      window.removeEventListener("pointercancel", finishAcrossPage, true);
+    };
+  }, [dragging]);
+
+  function addAction(type: ActionType) {
+    if (instructions.length >= 8) { setNotice("指令栏装满啦，先删掉一条"); return; }
+    const id = idRef.current++;
+    setInstructions(previous => [...previous, { id, type }]);
+    setActiveSlot(null);
+    setNotice(`${ACTION_META[type].title}动作建好啦，把参数拖进虚线空格`);
   }
 
-  function remove(id: number) { setCommands(prev => prev.filter(c => c.id !== id)); }
-  function clear() { setCommands([]); setPiece(START); setSuccess(false); setNotice("已清空，花窗回到起点"); }
-  function undo() {
-    if (!commands.length) { setNotice("暂时没有可以撤销的指令"); return; }
-    setCommands(prev => prev.slice(0, -1)); setNotice("已撤销上一条指令");
+  function removeInstruction(id: number) {
+    setInstructions(previous => previous.filter(item => item.id !== id));
+    if (activeSlot?.id === id) setActiveSlot(null);
+  }
+
+  function accepts(field: SlotField, payload: ParameterPayload) {
+    if (field === "direction") return payload.kind === "translate-direction";
+    if (field === "distance") return payload.kind === "step";
+    if (field === "center") return payload.kind === "point";
+    if (field === "rotationDirection") return payload.kind === "rotation-direction";
+    if (field === "angle") return payload.kind === "angle";
+    return payload.kind === "axis";
+  }
+
+  function placeParameter(id: number, field: SlotField, payload: ParameterPayload) {
+    if (!accepts(field, payload)) {
+      setNotice("这张参数卡放不到这个空格里，看看参数分组和空格文字");
+      return false;
+    }
+    setInstructions(previous => previous.map(item => {
+      if (item.id !== id) return item;
+      if (field === "direction" && payload.kind === "translate-direction") return { ...item, direction: payload.value };
+      if (field === "distance" && payload.kind === "step") return { ...item, distance: payload.value };
+      if (field === "center" && payload.kind === "point") return { ...item, center: payload.value };
+      if (field === "rotationDirection" && payload.kind === "rotation-direction") return { ...item, rotationDirection: payload.value };
+      if (field === "angle" && payload.kind === "angle") return { ...item, angle: payload.value };
+      if (field === "axis" && payload.kind === "axis") return { ...item, axis: payload.value };
+      return item;
+    }));
+    setNotice(`${payload.label} 已经放好`);
+    setActiveSlot(null);
+    return true;
+  }
+
+  function useParameterByClick(payload: ParameterPayload) {
+    if (suppressClickRef.current) { suppressClickRef.current = false; return; }
+    if (!activeSlot) {
+      setNotice("先点中间的一个虚线空格，再点这张参数卡");
+      return;
+    }
+    placeParameter(activeSlot.id, activeSlot.field, payload);
+  }
+
+  function startCopyDrag(event: React.PointerEvent<HTMLButtonElement>, payload: ParameterPayload) {
+    if (event.button !== 0 || running) return;
+    const rect = event.currentTarget.getBoundingClientRect();
+    const sourceX = rect.left + rect.width / 2;
+    const sourceY = rect.top + rect.height / 2;
+    pointerDragRef.current = { payload, pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, moved: false, sourceX, sourceY };
+    activeDragRef.current = payload;
+    setDragging(payload);
+    setDragGhost({ payload, x: event.clientX, y: event.clientY, sourceX, sourceY, returning: false });
+    setNotice(`拖动“${payload.label}”到亮起的匹配位置`);
+  }
+
+  function finishCopyDragAt(clientX: number, clientY: number, pointerId: number) {
+    const current = pointerDragRef.current;
+    if (!current || current.pointerId !== pointerId) return;
+    let accepted = false;
+    if (current.moved) {
+      const elements = document.elementsFromPoint(clientX, clientY);
+      if (current.payload.kind === "action") {
+        if (elements.some(element => element.closest(".instruction-workbench"))) {
+          addAction(current.payload.value);
+          accepted = true;
+        }
+      } else {
+        const slot = elements.map(element => element.closest<HTMLElement>(".parameter-slot")).find(Boolean);
+        const id = Number(slot?.dataset.instructionId);
+        const field = slot?.dataset.field as SlotField | undefined;
+        if (slot && id && field && accepts(field, current.payload)) accepted = placeParameter(id, field, current.payload);
+      }
+      suppressClickRef.current = true;
+      window.setTimeout(() => { suppressClickRef.current = false; }, 0);
+    }
+    pointerDragRef.current = null;
+    activeDragRef.current = null;
+    setDragging(null);
+    if (accepted || !current.moved) {
+      setDragGhost(null);
+    } else {
+      setNotice("这个参数不能放在这里，已经返回右侧");
+      setDragGhost(previous => previous ? { ...previous, x: current.sourceX, y: current.sourceY, returning: true } : previous);
+      window.setTimeout(() => setDragGhost(null), 220);
+    }
+  }
+
+  function clear() {
+    setInstructions([]); setPiece(START); setFeedback(null); setActiveSlot(null);
+    setNotice("已经回到起点，重新搭一条修复路线吧");
   }
 
   function run() {
-    if (!commands.length || running) { if (!commands.length) setNotice("请先从右侧添加修复指令"); return; }
-    setRunning(true); setSuccess(false); setPiece(START); setNotice("正在依次执行修复指令…");
+    if (!instructions.length || running) {
+      if (!instructions.length) {
+        setNotice("还没有修复指令");
+        setFeedback({ type: "error", title: "还不能提交", message: "请先将右侧动作模块拖到编程指令区，再填好所需参数。" });
+      }
+      return;
+    }
+    const commands = instructions.map(toCommand);
+    const firstIncomplete = commands.findIndex(command => !command);
+    if (firstIncomplete >= 0) {
+      setNotice(`第 ${firstIncomplete + 1} 条指令还有空格没有填`);
+      setFeedback({ type: "error", title: "参数还没填完整", message: `第 ${firstIncomplete + 1} 条指令还有空格，请把对应参数拖进去后再提交。` });
+      return;
+    }
+    setRunning(true); setFeedback(null); setPiece(START); setNotice("小小修复师正在执行指令…");
     let working = START;
-    commands.forEach((command, index) => {
+    const steps: PieceState[] = [];
+    let outOfGridAt = -1;
+    (commands as Command[]).some((command, index) => {
       working = applyCommand(working, command);
-      const next = working;
+      steps.push(working);
+      if (!isInsideGrid(working)) {
+        outOfGridAt = index;
+        return true;
+      }
+      return false;
+    });
+
+    steps.forEach((next, index) => {
       window.setTimeout(() => {
+        if (index === outOfGridAt) {
+          setPiece(START);
+          setRunning(false);
+          setNotice(`第 ${index + 1} 条指令让残片跑出了九宫格，已回到起点`);
+          setFeedback({
+            type: "error",
+            title: "残片跑出九宫格了！",
+            message: `第 ${index + 1} 条指令会把残片带到九宫格外，请检查这条指令的方向、距离、旋转中心或对称轴。残片已自动回到起点。`,
+          });
+          return;
+        }
         setPiece(next);
-        if (index === commands.length - 1) {
+        if (index === steps.length - 1) {
           const allUsed = mastery.translate && mastery.rotate && mastery.reflect;
           window.setTimeout(() => {
             setRunning(false);
-            if (isTarget(next) && allUsed) { setSuccess(true); setNotice("修复成功！三种图形变换全部掌握"); }
-            else if (isTarget(next)) setNotice("位置正确！再用齐平移、旋转和轴对称三枚修复章");
-            else setNotice("还差一点：观察残片的位置和朝向，再调整指令");
+            if (isTarget(next) && allUsed) {
+              setNotice("修复成功！三枚变换章都收集到了");
+              setFeedback({ type: "success", title: "太棒了，花窗修复成功！", message: "你正确运用了平移、旋转和轴对称，让四分之一残片精准回到了 BEAD 方格的缺口。" });
+            } else if (isTarget(next)) {
+              setPiece(START);
+              setNotice("位置正确，但三种变换还没有全部使用，已回到起点");
+              setFeedback({ type: "error", title: "已经很接近了", message: "残片已正确进入 BEAD 方格，但还需要在指令中用到平移、旋转和轴对称三种动作。残片已自动回到起点。" });
+            } else {
+              const positionCorrect = Math.abs(next.x - TARGET.x) < .01 && Math.abs(next.y - TARGET.y) < .01;
+              const directionCorrect = next.matrix.flat().every((value, matrixIndex) => Math.abs(value - TARGET.matrix.flat()[matrixIndex]) < .01);
+              const reason = positionCorrect
+                ? "残片已经到达 BEAD 方格，但纹样方向没有对齐，请检查旋转方向、角度或对称轴。"
+                : directionCorrect
+                  ? "残片纹样方向已经正确，但还没有到达 BEAD 方格，请检查平移方向和距离。"
+                  : "残片的位置和纹样方向都还没有对齐，请按顺序检查每条指令的参数。";
+              setPiece(START);
+              setNotice("这次还没有拼合，残片已回到起点");
+              setFeedback({ type: "error", title: "再试一次，你快成功了！", message: `${reason} 残片已自动回到起点。` });
+            }
           }, 450);
         }
       }, 180 + index * 620);
     });
   }
 
-  function dragPiece(event: React.PointerEvent<HTMLButtonElement>) {
-    if (running || !boardRef.current) return;
-    event.currentTarget.setPointerCapture(event.pointerId);
-    setNotice("可拖动观察位置；执行指令时会从右上角重新出发");
+  function ParamCard({ payload, tone }: { payload: ParameterPayload; tone: string }) {
+    return <button
+      className={`parameter-token ${tone}`}
+      onPointerDown={event => startCopyDrag(event, payload)}
+      onClick={() => useParameterByClick(payload)}
+      title="拖到中间空格；也可以先点空格再点卡片"
+    >{payload.label}</button>;
   }
 
-  function movePiece(event: React.PointerEvent<HTMLButtonElement>) {
-    if (!event.currentTarget.hasPointerCapture(event.pointerId) || !boardRef.current) return;
-    const rect = boardRef.current.getBoundingClientRect();
-    const cell = rect.width / 3;
-    const x = Math.max(.5, Math.min(2.5, Math.round((event.clientX - rect.left) / cell - .5) + .5));
-    const y = Math.max(.5, Math.min(2.5, Math.round((event.clientY - rect.top) / cell - .5) + .5));
-    setPiece(prev => ({ ...prev, x, y }));
+  function DropSlot({ instruction, field, value, placeholder, className = "" }: { instruction: DraftInstruction; field: SlotField; value?: string | number; placeholder: string; className?: string }) {
+    const selected = activeSlot?.id === instruction.id && activeSlot.field === field;
+    const compatible = dragging ? accepts(field, dragging) : false;
+    return <button
+      className={`parameter-slot ${value !== undefined ? "filled" : ""} ${selected ? "slot-selected" : ""} ${dragging ? compatible ? "can-drop" : "cannot-drop" : ""} ${className}`}
+      onClick={() => { setActiveSlot({ id: instruction.id, field }); setNotice("空格已选中，现在点右侧对应的参数卡"); }}
+      data-instruction-id={instruction.id}
+      data-field={field}
+      aria-label={value !== undefined ? `${placeholder}：${value}` : `空参数：${placeholder}`}
+    >{value ?? placeholder}</button>;
   }
 
   const cssMatrix = `matrix(${piece.matrix[0][0]},${piece.matrix[1][0]},${piece.matrix[0][1]},${piece.matrix[1][1]},0,0)`;
+  const translateDirections: Array<[Direction, string]> = [["up", "↑ 向上"], ["down", "↓ 向下"], ["left", "← 向左"], ["right", "→ 向右"]];
+  const rotationDirections: Array<[RotationDirection, string]> = [["cw", "↻ 顺时针"], ["ccw", "↺ 逆时针"]];
 
   return (
     <main className="game-shell">
       <header className="game-header">
         <div className="brand-mark">窗</div>
         <div className="brand-copy"><p>TRANSFORMATION WORKSHOP</p><h1>园林窗韵修复师</h1></div>
-        <div className="mission-pill"><span>第 1 关</span>月洞寻韵</div>
-        <button className="help-button" onClick={() => setShowHint(v => !v)} aria-expanded={showHint}>？<span>修复提示</span></button>
+        <button className="help-button" onClick={() => setShowHint(value => !value)} aria-expanded={showHint}>？<span>怎么玩</span></button>
       </header>
 
-      {showHint && <div className="hint-strip" role="note"><b>匠人手记</b><span>试试：向下 1 格 → 以 K 为中心逆时针旋转 90° → 沿 IJKL 轴对称 → 向左 1 格</span><button onClick={() => setShowHint(false)}>收起</button></div>}
+      {showHint && <div className="hint-strip" role="note"><b>搭好四条指令</b><span>① 拖入动作 → ② 把右侧参数拖入空格 → ③ 点击执行。试试：向左2格 → 绕O逆时针90度 → 沿EG轴对称 → 向下1格</span><button onClick={() => setShowHint(false)}>收起</button></div>}
 
       <section className="game-layout">
         <article className="panel board-panel">
-          <div className="panel-heading"><span>01</span><div><h2>修复工坊</h2><p>把右上角残片送回左下空位</p></div><div className="grid-chip">3 × 3</div></div>
+          <div className="panel-heading"><span>01</span><div><h2>修复工坊</h2><p>把右上角残片送回 BEAD 方格</p></div><div className="grid-chip">3 × 3</div></div>
           <div className="board-wrap">
-            <div className="board" ref={boardRef} aria-label="3×3 花窗拼图网格，交点标记为 A 到 P">
-              {Array.from({ length: 9 }, (_, i) => <div className="cell" key={i}><span>{i + 1}</span></div>)}
-              <WindowQuarter className="fixed q-tl" /><WindowQuarter className="fixed q-tr" /><WindowQuarter className="fixed q-br" />
+            <div className="board" aria-label="3×3 花窗拼图网格，标记十二个点 A、B、C、D、E、F、G、H、M、N、P、O，其中 O 为残片中心">
+              {Array.from({ length: 9 }, (_, index) => <div className="cell" key={index}><span>{index + 1}</span></div>)}
+              <WindowQuarter className="fixed q-tr" /><WindowQuarter className="fixed q-bl" /><WindowQuarter className="fixed q-br" />
               <div className="target-slot"><span>缺口</span></div>
-              <button
-                className="movable-wrap"
-                style={{ left: `${(piece.x - .5) * 33.333}%`, top: `${(piece.y - .5) * 33.333}%`, transform: cssMatrix }}
-                onPointerDown={dragPiece} onPointerMove={movePiece} aria-label="可拖动的四分之一花窗残片"
-              ><WindowQuarter className="movable" movable /><i>拖动观察</i></button>
-              {POINTS.map((point, i) => <span key={point} className="point-label" style={{ left: `${(i % 4) * 33.333}%`, top: `${Math.floor(i / 4) * 33.333}%` }}>{point}</span>)}
+              <div className="movable-wrap" style={{ left: `${(piece.x - .5) * 33.333}%`, top: `${(piece.y - .5) * 33.333}%`, transform: cssMatrix }} aria-label="四分之一花窗残片"><WindowQuarter className="movable" movable /></div>
+              {FIXED_POINTS.map(point => <span key={point.name} className="point-label" style={{ left: `${point.x / 3 * 100}%`, top: `${point.y / 3 * 100}%` }}>{point.name}</span>)}
+              <span className="point-label point-o" style={{ left: `${piece.x / 3 * 100}%`, top: `${piece.y / 3 * 100}%` }}>O</span>
               {running && <div className="running-glow" />}
             </div>
           </div>
           <div className="board-status"><span className={running ? "pulse-dot" : ""} />{notice}</div>
-          <div className="board-actions"><button className="run" onClick={run} disabled={running}>▶ {running ? "修复中…" : "执行修复"}</button><button onClick={undo}>↶ 撤销一步</button><button onClick={clear}>↻ 重新开始</button></div>
+          <div className="board-actions"><button className="run" onClick={run} disabled={running}>▶ {running ? "修复中…" : "执行修复"}</button><button onClick={clear}>↻ 重新开始</button></div>
         </article>
 
-        <article className="panel queue-panel">
-          <div className="panel-heading"><span>02</span><div><h2>修复指令</h2><p>按顺序编排图形运动</p></div><b>{commands.length} / 8</b></div>
-          <div className="mastery-row">
-            <span className={mastery.translate ? "earned" : ""}>✓ 平移</span>
-            <span className={mastery.rotate ? "earned" : ""}>✓ 旋转</span>
-            <span className={mastery.reflect ? "earned" : ""}>✓ 轴对称</span>
-          </div>
-          {commands.length === 0 ? <div className="empty-queue"><div>+</div><strong>还没有修复指令</strong><p>从右侧选择要素，加入运动序列</p></div> :
-            <ol className="command-list">{commands.map((command, index) => {
-              const copy = commandCopy(command);
-              return <li key={command.id} className={command.type}>
-                <span className="command-number">{String(index + 1).padStart(2, "0")}</span>
-                <span className="command-mark">{copy.mark}</span>
-                <div><strong>{copy.title}</strong><p>{copy.detail}</p></div>
-                <button onClick={() => remove(command.id)} aria-label={`删除第${index + 1}条指令`}>×</button>
+        <article className={`panel queue-panel instruction-workbench ${dragging ? "is-dragging" : ""}`}>
+          <div className="panel-heading"><span>02</span><div><h2>修复指令</h2><p>动作搭骨架，参数填空格</p></div><b>{completeCount} / {instructions.length}</b></div>
+          <div className="mastery-row"><span className={mastery.translate ? "earned" : ""}>✓ 平移</span><span className={mastery.rotate ? "earned" : ""}>✓ 旋转</span><span className={mastery.reflect ? "earned" : ""}>✓ 轴对称</span></div>
+          {instructions.length === 0 ? <div className="empty-queue action-empty"><div>＋</div><strong>将右侧动作模块拖到这里</strong><p>平移、旋转、轴对称都可以拖入</p></div> :
+            <ol className="instruction-list">{instructions.map((instruction, index) => {
+              const meta = ACTION_META[instruction.type];
+              return <li key={instruction.id} className={`instruction-row ${instruction.type} ${toCommand(instruction) ? "is-complete" : ""}`}>
+                <span className="instruction-index">{index + 1}</span>
+                <span className="action-tag"><i>{meta.icon}</i>{meta.title}</span>
+                <div className="instruction-slots">
+                  {instruction.type === "translate" && <>
+                    <span className="slot-word">方向（</span><DropSlot instruction={instruction} field="direction" value={instruction.direction ? { up: "向上", down: "向下", left: "向左", right: "向右" }[instruction.direction] : undefined} placeholder="拖入方向" /><span className="slot-word">），距离移动（</span>
+                    <DropSlot instruction={instruction} field="distance" value={instruction.distance} placeholder="步数" className="small-slot" /><span className="slot-word">）格</span>
+                  </>}
+                  {instruction.type === "rotate" && <>
+                    <span className="slot-word">绕（</span><DropSlot instruction={instruction} field="center" value={instruction.center} placeholder="点位" className="small-slot" /><span className="slot-word">）点，沿着（</span>
+                    <DropSlot instruction={instruction} field="rotationDirection" value={instruction.rotationDirection ? instruction.rotationDirection === "cw" ? "顺时针" : "逆时针" : undefined} placeholder="旋转方向" /><span className="slot-word">）方向，旋转（</span>
+                    <DropSlot instruction={instruction} field="angle" value={instruction.angle} placeholder="角度" className="small-slot" /><span className="slot-word">）度</span>
+                  </>}
+                  {instruction.type === "reflect" && <>
+                    <span className="slot-word">沿着对称轴（</span><DropSlot instruction={instruction} field="axis" value={instruction.axis} placeholder="选择轴" className="small-slot point-only-slot" /><span className="slot-word">）进行轴对称</span>
+                  </>}
+                </div>
+                <button className="remove-instruction" onClick={() => removeInstruction(instruction.id)} aria-label={`删除第${index + 1}条指令`}>×</button>
               </li>;
             })}</ol>}
-          <div className="queue-foot"><span>指令会自上而下依次执行</span><button onClick={() => setCommands([])}>清空队列</button></div>
+          <div className="queue-foot"><span>虚线空格可以重复替换参数</span><button onClick={() => setInstructions([])}>清空指令</button></div>
         </article>
 
-        <aside className="panel tools-panel">
-          <div className="panel-heading"><span>03</span><div><h2>变换工具</h2><p>补全每种变换的关键要素</p></div></div>
+        <aside className="panel tools-panel builder-panel">
+          <div className="panel-heading"><span>03</span><div><h2>动作与参数</h2><p>先建动作，再拖参数</p></div></div>
 
-          <section className="tool-card translate">
-            <header><span>↗</span><div><h3>平移</h3><p><b>方向</b> + <b>距离</b></p></div></header>
-            <label>选择方向</label>
-            <div className="choice-row direction-grid">
-              {([["up", "↑ 上"], ["down", "↓ 下"], ["left", "← 左"], ["right", "→ 右"]] as const).map(([value, label]) => <button key={value} className={direction === value ? "active" : ""} onClick={() => setDirection(value)}>{label}</button>)}
-            </div>
-            <label>移动距离</label>
-            <div className="choice-row">{[1, 2, 3].map(n => <button key={n} className={distance === n ? "active" : ""} onClick={() => setDistance(n)}>{n} 格</button>)}</div>
-            <button className="add-command" onClick={() => add({ type: "translate", direction, distance })}>＋ 加入平移指令</button>
+          <section className="builder-section action-builder">
+            <div className="builder-title"><span>1</span><div><b>建立动作</b><small>拖到中间建立一条新指令</small></div></div>
+            <div className="action-module-grid">{(Object.keys(ACTION_META) as ActionType[]).map(type => {
+              const payload: ParameterPayload = { kind: "action", value: type, label: ACTION_META[type].title };
+              return <button key={type} className={`action-module ${type}`} onPointerDown={event => startCopyDrag(event, payload)}><i>{ACTION_META[type].icon}</i><b>{ACTION_META[type].title}</b><small>{ACTION_META[type].hint}</small></button>;
+            })}</div>
           </section>
 
-          <section className="tool-card rotate">
-            <header><span>↻</span><div><h3>旋转</h3><p><b>旋转中心</b> + <b>方向</b> + <b>角度</b></p></div></header>
-            <label htmlFor="center-select">旋转中心</label>
-            <select id="center-select" value={center} onChange={e => setCenter(e.target.value)}>{POINTS.map(p => <option key={p} value={p}>交点 {p}</option>)}</select>
-            <div className="two-columns">
-              <div><label>旋转方向</label><div className="choice-row"><button className={rotationDirection === "cw" ? "active" : ""} onClick={() => setRotationDirection("cw")}>↻ 顺时针</button><button className={rotationDirection === "ccw" ? "active" : ""} onClick={() => setRotationDirection("ccw")}>↺ 逆时针</button></div></div>
-              <div><label>旋转角度</label><div className="choice-row">{[90, 180, 270].map(n => <button key={n} className={angle === n ? "active" : ""} onClick={() => setAngle(n)}>{n}°</button>)}</div></div>
-            </div>
-            <button className="add-command" onClick={() => add({ type: "rotate", center, direction: rotationDirection, angle })}>＋ 加入旋转指令</button>
+          <section className="builder-section parameter-bank translate-bank">
+            <div className="builder-title"><span>2</span><div><b>平移参数</b><small>方向卡 + 步数卡</small></div></div>
+            <label>方向</label><div className="token-grid four">{translateDirections.map(([value, label]) => <ParamCard key={value} payload={{ kind: "translate-direction", value, label }} tone="teal" />)}</div>
+            <label>距离</label><div className="token-grid four">{[1, 2, 3, 4].map(value => <ParamCard key={value} payload={{ kind: "step", value, label: String(value) }} tone="teal-light" />)}</div>
           </section>
 
-          <section className="tool-card reflect">
-            <header><span>◇</span><div><h3>轴对称</h3><p>沿着<b>哪条对称轴</b></p></div></header>
-            <label htmlFor="axis-select">选择对称轴</label>
-            <select id="axis-select" value={axis} onChange={e => setAxis(e.target.value)}>{Object.entries(AXES).map(([value, item]) => <option key={value} value={value}>{item.label}</option>)}</select>
-            <div className="axis-preview"><span className={axis === "IJKL" || axis === "EFGH" ? "horizontal" : axis === "AFKP" ? "diagonal" : ""} /><small>{AXES[axis].label}</small></div>
-            <button className="add-command" onClick={() => add({ type: "reflect", axis })}>＋ 加入轴对称指令</button>
+          <section className="builder-section parameter-bank rotate-bank">
+            <div className="builder-title"><span>3</span><div><b>旋转参数</b><small>方向 + 角度 + 旋转中心</small></div></div>
+            <div className="token-grid two">{rotationDirections.map(([value, label]) => <ParamCard key={value} payload={{ kind: "rotation-direction", value, label }} tone="plum" />)}</div>
+            <div className="token-grid two compact-angle-row">{[90, 180].map(value => <ParamCard key={value} payload={{ kind: "angle", value, label: `${value}°` }} tone="plum-light" />)}</div>
+            <label>旋转中心</label><div className="token-grid point-tokens">{ROTATION_POINTS.map(value => <ParamCard key={value} payload={{ kind: "point", value, label: value }} tone={value === "O" ? "coral" : "gold"} />)}</div>
+          </section>
+
+          <section className="builder-section parameter-bank symmetry-bank">
+            <div className="builder-title"><span>4</span><div><b>轴对称参数</b><small>选择一条由两点确定的对称轴</small></div></div>
+            <div className="token-grid axis-tokens">{SYMMETRY_AXES.map(value => <ParamCard key={value} payload={{ kind: "axis", value, label: value }} tone="gold" />)}</div>
           </section>
         </aside>
       </section>
 
-      {success && <div className="success-overlay" role="dialog" aria-modal="true" aria-label="修复成功">
-        <div className="success-card">
-          <span className="success-seal">修</span><p>WINDOW RESTORED</p><h2>一窗一景，修复完成</h2>
-          <div className="mini-window"><WindowQuarter className="mini-tl" /><WindowQuarter className="mini-tr" /><WindowQuarter className="mini-bl" /><WindowQuarter className="mini-br" /></div>
-          <p className="success-copy">你准确运用了平移、旋转和轴对称，<br />让残缺的花窗重新合圆。</p>
-          <div className="success-badges"><span>平移章</span><span>旋转章</span><span>对称章</span></div>
-          <button onClick={() => { setSuccess(false); clear(); }}>再修一次</button>
-        </div>
-      </div>}
+      {dragGhost && <div
+        className={`drag-copy ${dragGhost.payload.kind} ${dragGhost.payload.kind === "action" ? `action-${dragGhost.payload.value}` : ""} ${dragGhost.returning ? "returning" : ""}`}
+        style={{ left: dragGhost.x, top: dragGhost.y }}
+        aria-hidden="true"
+      ><span>⠿</span><b>{dragGhost.payload.label}</b></div>}
+
+      {feedback && <div className="success-overlay result-overlay" role="dialog" aria-modal="true" aria-label={feedback.type === "success" ? "修复成功" : "修复结果提示"}><div className={`result-card ${feedback.type}`}><div className="result-icon">{feedback.type === "success" ? "🎉" : "💡"}</div><h2>{feedback.title}</h2><p>{feedback.message}</p><button onClick={() => setFeedback(null)}>{feedback.type === "success" ? "确定" : "返回修改"}</button></div></div>}
     </main>
   );
 }

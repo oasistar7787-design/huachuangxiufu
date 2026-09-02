@@ -24,6 +24,12 @@ test("renders the garden-window transformation game", async () => {
   assert.match(html, /平移/);
   assert.match(html, /旋转/);
   assert.match(html, /轴对称/);
-  assert.match(html, /交点标记为 A 到 P/);
+  assert.match(html, /标记十二个点 A、B、C、D、E、F、G、H、M、N、P、O/);
+  assert.match(html, /将右侧动作模块拖到这里/);
+  assert.match(html, /轴对称参数/);
+  assert.match(html, /MH/);
+  assert.match(html, /180°/);
+  assert.doesNotMatch(html, /270°/);
+  assert.doesNotMatch(html, /拖动观察|拿走末条|第 1 关|月洞寻韵/);
   assert.doesNotMatch(html, /codex-preview|Your site is taking shape/);
 });
