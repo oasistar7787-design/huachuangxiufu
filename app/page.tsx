@@ -128,7 +128,7 @@ function isInsideGrid(piece: PieceState) {
 
 function WindowQuarter({ className = "", movable = false }: { className?: string; movable?: boolean }) {
   return <div className={`quarter ${className}`} aria-hidden={!movable}>
-    <img src="/window-quarter-reference.png" alt="" draggable={false} />
+    <img src="window-quarter-reference.png" alt="" draggable={false} />
   </div>;
 }
 
