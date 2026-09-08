@@ -154,8 +154,7 @@ function getAxisLine(axis: string | null) {
 
 function WindowQuarter({ className = "", movable = false }: { className?: string; movable?: boolean }) {
   return <div className={`quarter ${className}`} aria-hidden={!movable}>
-    <span className="quarter-half quarter-half-source"><img src="window-quarter-reference.png" alt="" draggable={false} /></span>
-    <span className="quarter-half quarter-half-mirror"><img src="window-quarter-reference.png" alt="" draggable={false} /></span>
+    <img src="window-quarter-reference.png" alt="" draggable={false} />
   </div>;
 }
 
