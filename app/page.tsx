@@ -132,6 +132,26 @@ function isInsideGrid(piece: PieceState) {
     && piece.y >= 0.5 - epsilon && piece.y <= 2.5 + epsilon;
 }
 
+function getAxisLine(axis: string | null) {
+  if (!axis) return null;
+  const start = POINT_COORDS[axis[0]];
+  const end = POINT_COORDS[axis[1]];
+  if (!start || !end) return null;
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  const candidates: Array<{ x: number; y: number; t: number }> = [];
+  const addPoint = (t: number) => {
+    const x = start.x + t * dx;
+    const y = start.y + t * dy;
+    if (x >= -0.001 && x <= 3.001 && y >= -0.001 && y <= 3.001) candidates.push({ x, y, t });
+  };
+  if (dx !== 0) { addPoint((0 - start.x) / dx); addPoint((3 - start.x) / dx); }
+  if (dy !== 0) { addPoint((0 - start.y) / dy); addPoint((3 - start.y) / dy); }
+  const unique = candidates.filter((point, index) => candidates.findIndex(other => Math.abs(other.x - point.x) < 0.001 && Math.abs(other.y - point.y) < 0.001) === index).sort((a, b) => a.t - b.t);
+  if (unique.length < 2) return null;
+  return { x1: unique[0].x, y1: unique[0].y, x2: unique[unique.length - 1].x, y2: unique[unique.length - 1].y };
+}
+
 function WindowQuarter({ className = "", movable = false }: { className?: string; movable?: boolean }) {
   return <div className={`quarter ${className}`} aria-hidden={!movable}>
     <img src="window-quarter-reference.png" alt="" draggable={false} />
@@ -147,6 +167,8 @@ export default function Home() {
   const [feedback, setFeedback] = useState<ResultFeedback | null>(null);
   const [reviewIndex, setReviewIndex] = useState<number | null>(null);
   const [resultHeld, setResultHeld] = useState(false);
+  const [axisPreview, setAxisPreview] = useState<string | null>(null);
+  const [motionType, setMotionType] = useState<ActionType | null>(null);
   const [dragGhost, setDragGhost] = useState<DragGhost | null>(null);
   const [notice, setNotice] = useState("先把一种动作拖到中间，再把右侧参数拖进空格");
   const [showHint, setShowHint] = useState(false);
@@ -161,6 +183,8 @@ export default function Home() {
     rotate: instructions.some(item => item.type === "rotate" && toCommand(item)),
     reflect: instructions.some(item => item.type === "reflect" && toCommand(item)),
   }), [instructions]);
+  const selectedAxis = useMemo(() => axisPreview ?? [...instructions].reverse().find(item => item.axis)?.axis ?? null, [axisPreview, instructions]);
+  const axisLine = useMemo(() => getAxisLine(selectedAxis), [selectedAxis]);
 
   useEffect(() => {
     if (!dragging) return;
@@ -221,6 +245,7 @@ export default function Home() {
       if (field === "axis" && payload.kind === "axis") return { ...item, axis: payload.value };
       return item;
     }));
+    if (payload.kind === "axis") setAxisPreview(payload.value);
     setReviewIndex(null);
     setNotice(`${payload.label} 已经放好`);
     setActiveSlot(null);
@@ -230,6 +255,11 @@ export default function Home() {
   function useParameterByClick(payload: ParameterPayload) {
     if (suppressClickRef.current) { suppressClickRef.current = false; return; }
     if (!activeSlot) {
+      if (payload.kind === "axis") {
+        setAxisPreview(payload.value);
+        setNotice(`虚线展示的是 ${payload.value} 对称轴，把它拖进轴对称指令即可使用`);
+        return;
+      }
       setNotice("先点中间的一个虚线空格，再点这张参数卡");
       return;
     }
@@ -238,6 +268,7 @@ export default function Home() {
 
   function startCopyDrag(event: React.PointerEvent<HTMLButtonElement>, payload: ParameterPayload) {
     if (event.button !== 0 || running) return;
+    if (payload.kind === "axis") setAxisPreview(payload.value);
     const rect = event.currentTarget.getBoundingClientRect();
     const sourceX = rect.left + rect.width / 2;
     const sourceY = rect.top + rect.height / 2;
@@ -281,7 +312,7 @@ export default function Home() {
   }
 
   function clear() {
-    setInstructions([]); setPiece(START); setFeedback(null); setActiveSlot(null); setReviewIndex(null); setResultHeld(false);
+    setInstructions([]); setPiece(START); setFeedback(null); setActiveSlot(null); setReviewIndex(null); setResultHeld(false); setAxisPreview(null); setMotionType(null);
     setNotice("已经回到起点，重新搭一条修复路线吧");
   }
 
@@ -302,11 +333,12 @@ export default function Home() {
       return;
     }
     const firstStepDelay = isSamePiece(piece, START) ? 300 : 820;
-    setRunning(true); setFeedback(null); setPiece(START); setReviewIndex(null); setResultHeld(false); setNotice("小小修复师正在执行指令…");
+    setRunning(true); setFeedback(null); setPiece(START); setReviewIndex(null); setResultHeld(false); setMotionType(null); setNotice("小小修复师正在执行指令…");
     let working = START;
     const steps: PieceState[] = [];
     let outOfGridAt = -1;
-    (commands as Command[]).some((command, index) => {
+    const resolvedCommands = commands as Command[];
+    resolvedCommands.some((command, index) => {
       working = applyCommand(working, command);
       steps.push(working);
       if (!isInsideGrid(working)) {
@@ -316,8 +348,14 @@ export default function Home() {
       return false;
     });
 
+    let elapsed = firstStepDelay;
     steps.forEach((next, index) => {
+      const command = resolvedCommands[index];
+      const stepStart = elapsed;
+      elapsed += command.type === "reflect" ? 2050 : 1450;
       window.setTimeout(() => {
+        setMotionType(command.type);
+        if (command.type === "reflect") setAxisPreview(command.axisPoints.join(""));
         setReviewIndex(index);
         if (index === outOfGridAt) {
           const lastVisibleState = index > 0 ? steps[index - 1] : START;
@@ -357,7 +395,7 @@ export default function Home() {
             }
           }, 700);
         }
-      }, firstStepDelay + index * 920);
+      }, stepStart);
     });
   }
 
@@ -400,11 +438,12 @@ export default function Home() {
         <article className="panel board-panel">
           <div className="panel-heading"><span>01</span><div><h2>修复工坊</h2><p>把右上角残片送回 BEAD 方格</p></div><div className="grid-chip">3 × 3</div></div>
           <div className="board-wrap">
-            <div className="board" aria-label="3×3 花窗拼图网格，标记十二个点 A、B、C、D、E、F、G、H、M、N、P、O，其中 O 为残片中心">
+            <div className={`board ${motionType ? `motion-${motionType}` : ""}`} aria-label="3×3 花窗拼图网格，标记十二个点 A、B、C、D、E、F、G、H、M、N、P、O，其中 O 为残片中心">
               {Array.from({ length: 9 }, (_, index) => <div className="cell" key={index}><span>{index + 1}</span></div>)}
               <WindowQuarter className="fixed q-tr" /><WindowQuarter className="fixed q-bl" /><WindowQuarter className="fixed q-br" />
               <div className="target-slot"><span>缺口</span></div>
-              <div className="start-marker" aria-label="起点，每次执行都从这里出发"><b>起点</b><small>每次从这里出发</small></div>
+              <WindowQuarter className="start-ghost" />
+              {axisLine && <svg className="axis-guide" viewBox="0 0 3 3" preserveAspectRatio="none" aria-label={`${selectedAxis} 对称轴`}><line x1={axisLine.x1} y1={axisLine.y1} x2={axisLine.x2} y2={axisLine.y2} /></svg>}
               <div className="movable-wrap" style={{ left: `${(piece.x - .5) * 33.333}%`, top: `${(piece.y - .5) * 33.333}%`, transform: cssMatrix }} aria-label="四分之一花窗残片"><WindowQuarter className="movable" movable /></div>
               {FIXED_POINTS.map(point => <span key={point.name} className="point-label" style={{ left: `${point.x / 3 * 100}%`, top: `${point.y / 3 * 100}%` }}>{point.name}</span>)}
               <span className="point-label point-o" style={{ left: `${piece.x / 3 * 100}%`, top: `${piece.y / 3 * 100}%` }}>O</span>
