@@ -120,6 +120,12 @@ function isTarget(piece: PieceState) {
     && piece.matrix.flat().every((value, index) => close(value, TARGET.matrix.flat()[index]));
 }
 
+function isSamePiece(a: PieceState, b: PieceState) {
+  const close = (left: number, right: number) => Math.abs(left - right) < 0.01;
+  return close(a.x, b.x) && close(a.y, b.y)
+    && a.matrix.flat().every((value, index) => close(value, b.matrix.flat()[index]));
+}
+
 function isInsideGrid(piece: PieceState) {
   const epsilon = 0.01;
   return piece.x >= 0.5 - epsilon && piece.x <= 2.5 + epsilon
@@ -139,6 +145,7 @@ export default function Home() {
   const [dragging, setDragging] = useState<ParameterPayload | null>(null);
   const [running, setRunning] = useState(false);
   const [feedback, setFeedback] = useState<ResultFeedback | null>(null);
+  const [reviewIndex, setReviewIndex] = useState<number | null>(null);
   const [dragGhost, setDragGhost] = useState<DragGhost | null>(null);
   const [notice, setNotice] = useState("先把一种动作拖到中间，再把右侧参数拖进空格");
   const [showHint, setShowHint] = useState(false);
@@ -178,12 +185,14 @@ export default function Home() {
     if (instructions.length >= 8) { setNotice("指令栏装满啦，先删掉一条"); return; }
     const id = idRef.current++;
     setInstructions(previous => [...previous, { id, type }]);
+    setReviewIndex(null);
     setActiveSlot(null);
     setNotice(`${ACTION_META[type].title}动作建好啦，把参数拖进虚线空格`);
   }
 
   function removeInstruction(id: number) {
     setInstructions(previous => previous.filter(item => item.id !== id));
+    setReviewIndex(null);
     if (activeSlot?.id === id) setActiveSlot(null);
   }
 
@@ -211,6 +220,7 @@ export default function Home() {
       if (field === "axis" && payload.kind === "axis") return { ...item, axis: payload.value };
       return item;
     }));
+    setReviewIndex(null);
     setNotice(`${payload.label} 已经放好`);
     setActiveSlot(null);
     return true;
@@ -270,7 +280,7 @@ export default function Home() {
   }
 
   function clear() {
-    setInstructions([]); setPiece(START); setFeedback(null); setActiveSlot(null);
+    setInstructions([]); setPiece(START); setFeedback(null); setActiveSlot(null); setReviewIndex(null);
     setNotice("已经回到起点，重新搭一条修复路线吧");
   }
 
@@ -285,11 +295,13 @@ export default function Home() {
     const commands = instructions.map(toCommand);
     const firstIncomplete = commands.findIndex(command => !command);
     if (firstIncomplete >= 0) {
+      setReviewIndex(firstIncomplete);
       setNotice(`第 ${firstIncomplete + 1} 条指令还有空格没有填`);
       setFeedback({ type: "error", title: "参数还没填完整", message: `第 ${firstIncomplete + 1} 条指令还有空格，请把对应参数拖进去后再提交。` });
       return;
     }
-    setRunning(true); setFeedback(null); setPiece(START); setNotice("小小修复师正在执行指令…");
+    const firstStepDelay = isSamePiece(piece, START) ? 300 : 820;
+    setRunning(true); setFeedback(null); setPiece(START); setReviewIndex(null); setNotice("小小修复师正在执行指令…");
     let working = START;
     const steps: PieceState[] = [];
     let outOfGridAt = -1;
@@ -305,14 +317,16 @@ export default function Home() {
 
     steps.forEach((next, index) => {
       window.setTimeout(() => {
+        setReviewIndex(index);
         if (index === outOfGridAt) {
-          setPiece(START);
+          const lastVisibleState = index > 0 ? steps[index - 1] : START;
+          setPiece(lastVisibleState);
           setRunning(false);
-          setNotice(`第 ${index + 1} 条指令让残片跑出了九宫格，已回到起点`);
+          setNotice(`已停在第 ${index + 1} 条指令出界前，请对照画面修改`);
           setFeedback({
             type: "error",
-            title: "残片跑出九宫格了！",
-            message: `第 ${index + 1} 条指令会把残片带到九宫格外，请检查这条指令的方向、距离、旋转中心或对称轴。残片已自动回到起点。`,
+            title: "残片要跑出九宫格了！",
+            message: `第 ${index + 1} 条指令会把残片带到九宫格外。画面已停在出界前一帧，并标出了这条指令，请对照检查方向、距离、旋转中心或对称轴。`,
           });
           return;
         }
@@ -325,9 +339,8 @@ export default function Home() {
               setNotice("修复成功！三枚变换章都收集到了");
               setFeedback({ type: "success", title: "太棒了，花窗修复成功！", message: "你正确运用了平移、旋转和轴对称，让四分之一残片精准回到了 BEAD 方格的缺口。" });
             } else if (isTarget(next)) {
-              setPiece(START);
-              setNotice("位置正确，但三种变换还没有全部使用，已回到起点");
-              setFeedback({ type: "error", title: "已经很接近了", message: "残片已正确进入 BEAD 方格，但还需要在指令中用到平移、旋转和轴对称三种动作。残片已自动回到起点。" });
+              setNotice("位置正确，画面已保留；请补齐三种变换");
+              setFeedback({ type: "error", title: "已经很接近了", message: "残片已正确进入 BEAD 方格，但还需要在指令中用到平移、旋转和轴对称三种动作。当前结果会保留，方便你对照修改。" });
             } else {
               const positionCorrect = Math.abs(next.x - TARGET.x) < .01 && Math.abs(next.y - TARGET.y) < .01;
               const directionCorrect = next.matrix.flat().every((value, matrixIndex) => Math.abs(value - TARGET.matrix.flat()[matrixIndex]) < .01);
@@ -336,13 +349,12 @@ export default function Home() {
                 : directionCorrect
                   ? "残片纹样方向已经正确，但还没有到达 BEAD 方格，请检查平移方向和距离。"
                   : "残片的位置和纹样方向都还没有对齐，请按顺序检查每条指令的参数。";
-              setPiece(START);
-              setNotice("这次还没有拼合，残片已回到起点");
-              setFeedback({ type: "error", title: "再试一次，你快成功了！", message: `${reason} 残片已自动回到起点。` });
+              setNotice("结果画面已保留，请对照检查高亮指令");
+              setFeedback({ type: "error", title: "再试一次，你快成功了！", message: `${reason} 当前结果会保留，关闭提示后可以一边看图一边修改。` });
             }
-          }, 450);
+          }, 700);
         }
-      }, 180 + index * 620);
+      }, firstStepDelay + index * 920);
     });
   }
 
@@ -405,7 +417,7 @@ export default function Home() {
           {instructions.length === 0 ? <div className="empty-queue action-empty"><div>＋</div><strong>将右侧动作模块拖到这里</strong><p>平移、旋转、轴对称都可以拖入</p></div> :
             <ol className="instruction-list">{instructions.map((instruction, index) => {
               const meta = ACTION_META[instruction.type];
-              return <li key={instruction.id} className={`instruction-row ${instruction.type} ${toCommand(instruction) ? "is-complete" : ""}`}>
+              return <li key={instruction.id} className={`instruction-row ${instruction.type} ${toCommand(instruction) ? "is-complete" : ""} ${reviewIndex === index ? "is-reviewing" : ""}`}>
                 <span className="instruction-index">{index + 1}</span>
                 <span className="action-tag"><i>{meta.icon}</i>{meta.title}</span>
                 <div className="instruction-slots">
@@ -425,7 +437,7 @@ export default function Home() {
                 <button className="remove-instruction" onClick={() => removeInstruction(instruction.id)} aria-label={`删除第${index + 1}条指令`}>×</button>
               </li>;
             })}</ol>}
-          <div className="queue-foot"><span>虚线空格可以重复替换参数</span><button onClick={() => setInstructions([])}>清空指令</button></div>
+          <div className="queue-foot"><span>虚线空格可以重复替换参数</span><button onClick={clear}>清空指令</button></div>
         </article>
 
         <aside className="panel tools-panel builder-panel">
@@ -465,7 +477,7 @@ export default function Home() {
         aria-hidden="true"
       ><span>⠿</span><b>{dragGhost.payload.label}</b></div>}
 
-      {feedback && <div className="success-overlay result-overlay" role="dialog" aria-modal="true" aria-label={feedback.type === "success" ? "修复成功" : "修复结果提示"}><div className={`result-card ${feedback.type}`}><div className="result-icon">{feedback.type === "success" ? "🎉" : "💡"}</div><h2>{feedback.title}</h2><p>{feedback.message}</p><button onClick={() => setFeedback(null)}>{feedback.type === "success" ? "确定" : "返回修改"}</button></div></div>}
+      {feedback && <div className="success-overlay result-overlay" role="dialog" aria-modal="true" aria-label={feedback.type === "success" ? "修复成功" : "修复结果提示"}><div className={`result-card ${feedback.type}`}><div className="result-icon">{feedback.type === "success" ? "🎉" : "💡"}</div><h2>{feedback.title}</h2><p>{feedback.message}</p><button onClick={() => setFeedback(null)}>{feedback.type === "success" ? "确定" : "保留画面，修改指令"}</button></div></div>}
     </main>
   );
 }
