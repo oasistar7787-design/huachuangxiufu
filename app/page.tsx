@@ -146,6 +146,7 @@ export default function Home() {
   const [running, setRunning] = useState(false);
   const [feedback, setFeedback] = useState<ResultFeedback | null>(null);
   const [reviewIndex, setReviewIndex] = useState<number | null>(null);
+  const [resultHeld, setResultHeld] = useState(false);
   const [dragGhost, setDragGhost] = useState<DragGhost | null>(null);
   const [notice, setNotice] = useState("先把一种动作拖到中间，再把右侧参数拖进空格");
   const [showHint, setShowHint] = useState(false);
@@ -280,7 +281,7 @@ export default function Home() {
   }
 
   function clear() {
-    setInstructions([]); setPiece(START); setFeedback(null); setActiveSlot(null); setReviewIndex(null);
+    setInstructions([]); setPiece(START); setFeedback(null); setActiveSlot(null); setReviewIndex(null); setResultHeld(false);
     setNotice("已经回到起点，重新搭一条修复路线吧");
   }
 
@@ -301,7 +302,7 @@ export default function Home() {
       return;
     }
     const firstStepDelay = isSamePiece(piece, START) ? 300 : 820;
-    setRunning(true); setFeedback(null); setPiece(START); setReviewIndex(null); setNotice("小小修复师正在执行指令…");
+    setRunning(true); setFeedback(null); setPiece(START); setReviewIndex(null); setResultHeld(false); setNotice("小小修复师正在执行指令…");
     let working = START;
     const steps: PieceState[] = [];
     let outOfGridAt = -1;
@@ -321,6 +322,7 @@ export default function Home() {
         if (index === outOfGridAt) {
           const lastVisibleState = index > 0 ? steps[index - 1] : START;
           setPiece(lastVisibleState);
+          setResultHeld(true);
           setRunning(false);
           setNotice(`已停在第 ${index + 1} 条指令出界前，请对照画面修改`);
           setFeedback({
@@ -335,6 +337,7 @@ export default function Home() {
           const allUsed = mastery.translate && mastery.rotate && mastery.reflect;
           window.setTimeout(() => {
             setRunning(false);
+            setResultHeld(true);
             if (isTarget(next) && allUsed) {
               setNotice("修复成功！三枚变换章都收集到了");
               setFeedback({ type: "success", title: "太棒了，花窗修复成功！", message: "你正确运用了平移、旋转和轴对称，让四分之一残片精准回到了 BEAD 方格的缺口。" });
@@ -401,6 +404,7 @@ export default function Home() {
               {Array.from({ length: 9 }, (_, index) => <div className="cell" key={index}><span>{index + 1}</span></div>)}
               <WindowQuarter className="fixed q-tr" /><WindowQuarter className="fixed q-bl" /><WindowQuarter className="fixed q-br" />
               <div className="target-slot"><span>缺口</span></div>
+              <div className="start-marker" aria-label="起点，每次执行都从这里出发"><b>起点</b><small>每次从这里出发</small></div>
               <div className="movable-wrap" style={{ left: `${(piece.x - .5) * 33.333}%`, top: `${(piece.y - .5) * 33.333}%`, transform: cssMatrix }} aria-label="四分之一花窗残片"><WindowQuarter className="movable" movable /></div>
               {FIXED_POINTS.map(point => <span key={point.name} className="point-label" style={{ left: `${point.x / 3 * 100}%`, top: `${point.y / 3 * 100}%` }}>{point.name}</span>)}
               <span className="point-label point-o" style={{ left: `${piece.x / 3 * 100}%`, top: `${piece.y / 3 * 100}%` }}>O</span>
@@ -408,7 +412,8 @@ export default function Home() {
             </div>
           </div>
           <div className="board-status"><span className={running ? "pulse-dot" : ""} />{notice}</div>
-          <div className="board-actions"><button className="run" onClick={run} disabled={running}>▶ {running ? "修复中…" : "执行修复"}</button><button onClick={clear}>↻ 重新开始</button></div>
+          {resultHeld && !running && <div className="result-held-note"><b>当前为上次结果</b><span>再次执行会从右上角起点重新开始</span></div>}
+          <div className="board-actions"><button className="run" onClick={run} disabled={running}>▶ {running ? "修复中…" : resultHeld ? "从起点重新执行" : "执行修复"}</button><button onClick={clear}>↻ 重新开始</button></div>
         </article>
 
         <article className={`panel queue-panel instruction-workbench ${dragging ? "is-dragging" : ""}`}>
