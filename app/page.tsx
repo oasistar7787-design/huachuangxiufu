@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import type { CSSProperties } from "react";
 
 type Mat = [[number, number], [number, number]];
 type PieceState = { x: number; y: number; matrix: Mat };
@@ -46,7 +47,7 @@ const ROTATION_POINTS = "ABCDEFGHMNPO".split("");
 const SYMMETRY_AXES = ["MH", "FE", "EH", "ED", "BE", "HG", "FH", "EG", "BD", "DG", "HP", "AD"];
 const POINT_COORDS: Record<string, { x: number; y: number }> = Object.fromEntries(FIXED_POINTS.map(point => [point.name, { x: point.x, y: point.y }]));
 const START: PieceState = { x: 2.5, y: 0.5, matrix: [[1, 0], [0, 1]] };
-const TARGET: PieceState = { x: 0.5, y: 1.5, matrix: [[-1, 0], [0, 1]] };
+const TARGET: PieceState = { x: 0.5, y: 1.5, matrix: [[0, 1], [-1, 0]] };
 const ACTION_META = {
   translate: { title: "平移", icon: "↗", hint: "方向 + 步数" },
   rotate: { title: "旋转", icon: "↻", hint: "中心 + 方向 + 角度" },
@@ -169,6 +170,7 @@ export default function Home() {
   const [resultHeld, setResultHeld] = useState(false);
   const [axisPreview, setAxisPreview] = useState<string | null>(null);
   const [motionType, setMotionType] = useState<ActionType | null>(null);
+  const [motionTick, setMotionTick] = useState(0);
   const [dragGhost, setDragGhost] = useState<DragGhost | null>(null);
   const [notice, setNotice] = useState("先把一种动作拖到中间，再把右侧参数拖进空格");
   const [showHint, setShowHint] = useState(false);
@@ -185,6 +187,19 @@ export default function Home() {
   }), [instructions]);
   const selectedAxis = useMemo(() => axisPreview ?? [...instructions].reverse().find(item => item.axis)?.axis ?? null, [axisPreview, instructions]);
   const axisLine = useMemo(() => getAxisLine(selectedAxis), [selectedAxis]);
+  const flipAxis = useMemo(() => {
+    if (!selectedAxis) return { x: 0, y: 1 };
+    const start = POINT_COORDS[selectedAxis[0]];
+    const end = POINT_COORDS[selectedAxis[1]];
+    if (!start || !end) return { x: 0, y: 1 };
+    const length = Math.hypot(end.x - start.x, end.y - start.y) || 1;
+    const globalX = (end.x - start.x) / length;
+    const globalY = (end.y - start.y) / length;
+    return {
+      x: piece.matrix[0][0] * globalX + piece.matrix[1][0] * globalY,
+      y: piece.matrix[0][1] * globalX + piece.matrix[1][1] * globalY,
+    };
+  }, [selectedAxis, piece.matrix]);
 
   useEffect(() => {
     if (!dragging) return;
@@ -355,6 +370,7 @@ export default function Home() {
       elapsed += command.type === "reflect" ? 2050 : 1450;
       window.setTimeout(() => {
         setMotionType(command.type);
+        setMotionTick(value => value + 1);
         if (command.type === "reflect") setAxisPreview(command.axisPoints.join(""));
         setReviewIndex(index);
         if (index === outOfGridAt) {
@@ -370,18 +386,20 @@ export default function Home() {
           });
           return;
         }
-        setPiece(next);
+        if (command.type === "reflect") {
+          const previous = index > 0 ? steps[index - 1] : START;
+          setPiece({ ...next, matrix: previous.matrix });
+          window.setTimeout(() => setPiece(next), 860);
+        } else {
+          setPiece(next);
+        }
         if (index === steps.length - 1) {
-          const allUsed = mastery.translate && mastery.rotate && mastery.reflect;
           window.setTimeout(() => {
             setRunning(false);
             setResultHeld(true);
-            if (isTarget(next) && allUsed) {
-              setNotice("修复成功！三枚变换章都收集到了");
-              setFeedback({ type: "success", title: "太棒了，花窗修复成功！", message: "你正确运用了平移、旋转和轴对称，让四分之一残片精准回到了 BEAD 方格的缺口。" });
-            } else if (isTarget(next)) {
-              setNotice("位置正确，画面已保留；请补齐三种变换");
-              setFeedback({ type: "error", title: "已经很接近了", message: "残片已正确进入 BEAD 方格，但还需要在指令中用到平移、旋转和轴对称三种动作。当前结果会保留，方便你对照修改。" });
+            if (isTarget(next)) {
+              setNotice("修复成功！残片的位置和方向都正确");
+              setFeedback({ type: "success", title: "太棒了，花窗修复成功！", message: "残片已经精准回到 BEAD 方格，并与周围花窗纹样正确衔接。" });
             } else {
               const positionCorrect = Math.abs(next.x - TARGET.x) < .01 && Math.abs(next.y - TARGET.y) < .01;
               const directionCorrect = next.matrix.flat().every((value, matrixIndex) => Math.abs(value - TARGET.matrix.flat()[matrixIndex]) < .01);
@@ -393,7 +411,7 @@ export default function Home() {
               setNotice("结果画面已保留，请对照检查高亮指令");
               setFeedback({ type: "error", title: "再试一次，你快成功了！", message: `${reason} 当前结果会保留，关闭提示后可以一边看图一边修改。` });
             }
-          }, 700);
+          }, command.type === "reflect" ? 1820 : 1180);
         }
       }, stepStart);
     });
@@ -432,7 +450,7 @@ export default function Home() {
         <button className="help-button" onClick={() => setShowHint(value => !value)} aria-expanded={showHint}>？<span>怎么玩</span></button>
       </header>
 
-      {showHint && <div className="hint-strip" role="note"><b>搭好四条指令</b><span>① 拖入动作 → ② 把右侧参数拖入空格 → ③ 点击执行。试试：向左2格 → 绕O逆时针90度 → 沿EG轴对称 → 向下1格</span><button onClick={() => setShowHint(false)}>收起</button></div>}
+      {showHint && <div className="hint-strip" role="note"><b>搭好修复指令</b><span>① 拖入动作 → ② 把右侧参数拖入空格 → ③ 点击执行。试试：向下1格 → 向左2格 → 绕O逆时针90度</span><button onClick={() => setShowHint(false)}>收起</button></div>}
 
       <section className="game-layout">
         <article className="panel board-panel">
@@ -444,7 +462,7 @@ export default function Home() {
               <div className="target-slot"><span>缺口</span></div>
               <WindowQuarter className="start-ghost" />
               {axisLine && <svg className="axis-guide" viewBox="0 0 3 3" preserveAspectRatio="none" aria-label={`${selectedAxis} 对称轴`}><line x1={axisLine.x1} y1={axisLine.y1} x2={axisLine.x2} y2={axisLine.y2} /></svg>}
-              <div className="movable-wrap" style={{ left: `${(piece.x - .5) * 33.333}%`, top: `${(piece.y - .5) * 33.333}%`, transform: cssMatrix }} aria-label="四分之一花窗残片"><WindowQuarter className="movable" movable /></div>
+              <div className="movable-wrap" style={{ left: `${(piece.x - .5) * 33.333}%`, top: `${(piece.y - .5) * 33.333}%`, transform: cssMatrix }} aria-label="四分之一花窗残片"><div key={motionTick} className="piece-flip-face" style={{ "--flip-axis-x": flipAxis.x, "--flip-axis-y": flipAxis.y } as CSSProperties}><WindowQuarter className="movable" movable /></div></div>
               {FIXED_POINTS.map(point => <span key={point.name} className="point-label" style={{ left: `${point.x / 3 * 100}%`, top: `${point.y / 3 * 100}%` }}>{point.name}</span>)}
               <span className="point-label point-o" style={{ left: `${piece.x / 3 * 100}%`, top: `${piece.y / 3 * 100}%` }}>O</span>
               {running && <div className="running-glow" />}
