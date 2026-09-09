@@ -162,6 +162,7 @@ function WindowQuarter({ className = "", movable = false }: { className?: string
 export default function Home() {
   const [instructions, setInstructions] = useState<DraftInstruction[]>([]);
   const [piece, setPiece] = useState<PieceState>(START);
+  const [visualPiece, setVisualPiece] = useState<PieceState>(START);
   const [activeSlot, setActiveSlot] = useState<{ id: number; field: SlotField } | null>(null);
   const [dragging, setDragging] = useState<ParameterPayload | null>(null);
   const [running, setRunning] = useState(false);
@@ -171,6 +172,7 @@ export default function Home() {
   const [axisPreview, setAxisPreview] = useState<string | null>(null);
   const [motionType, setMotionType] = useState<ActionType | null>(null);
   const [motionTick, setMotionTick] = useState(0);
+  const [snapPiece, setSnapPiece] = useState(false);
   const [dragGhost, setDragGhost] = useState<DragGhost | null>(null);
   const [notice, setNotice] = useState("先把一种动作拖到中间，再把右侧参数拖进空格");
   const [showHint, setShowHint] = useState(false);
@@ -187,19 +189,32 @@ export default function Home() {
   }), [instructions]);
   const selectedAxis = useMemo(() => axisPreview ?? [...instructions].reverse().find(item => item.axis)?.axis ?? null, [axisPreview, instructions]);
   const axisLine = useMemo(() => getAxisLine(selectedAxis), [selectedAxis]);
-  const flipAxis = useMemo(() => {
-    if (!selectedAxis) return { x: 0, y: 1 };
+  const flipGeometry = useMemo(() => {
+    if (!selectedAxis) return { x: 0, y: 1, originX: 50, originY: 50 };
     const start = POINT_COORDS[selectedAxis[0]];
     const end = POINT_COORDS[selectedAxis[1]];
-    if (!start || !end) return { x: 0, y: 1 };
+    if (!start || !end) return { x: 0, y: 1, originX: 50, originY: 50 };
     const length = Math.hypot(end.x - start.x, end.y - start.y) || 1;
     const globalX = (end.x - start.x) / length;
     const globalY = (end.y - start.y) / length;
+    const fromAxisX = visualPiece.x - start.x;
+    const fromAxisY = visualPiece.y - start.y;
+    const alongAxis = fromAxisX * globalX + fromAxisY * globalY;
+    const hingeX = start.x + alongAxis * globalX;
+    const hingeY = start.y + alongAxis * globalY;
+    const offsetX = hingeX - visualPiece.x;
+    const offsetY = hingeY - visualPiece.y;
+    const localAxisX = visualPiece.matrix[0][0] * globalX + visualPiece.matrix[1][0] * globalY;
+    const localAxisY = visualPiece.matrix[0][1] * globalX + visualPiece.matrix[1][1] * globalY;
+    const localOffsetX = visualPiece.matrix[0][0] * offsetX + visualPiece.matrix[1][0] * offsetY;
+    const localOffsetY = visualPiece.matrix[0][1] * offsetX + visualPiece.matrix[1][1] * offsetY;
     return {
-      x: piece.matrix[0][0] * globalX + piece.matrix[1][0] * globalY,
-      y: piece.matrix[0][1] * globalX + piece.matrix[1][1] * globalY,
+      x: localAxisX,
+      y: localAxisY,
+      originX: 50 + localOffsetX * 100,
+      originY: 50 + localOffsetY * 100,
     };
-  }, [selectedAxis, piece.matrix]);
+  }, [selectedAxis, visualPiece]);
 
   useEffect(() => {
     if (!dragging) return;
@@ -327,7 +342,7 @@ export default function Home() {
   }
 
   function clear() {
-    setInstructions([]); setPiece(START); setFeedback(null); setActiveSlot(null); setReviewIndex(null); setResultHeld(false); setAxisPreview(null); setMotionType(null);
+    setInstructions([]); setPiece(START); setVisualPiece(START); setFeedback(null); setActiveSlot(null); setReviewIndex(null); setResultHeld(false); setAxisPreview(null); setMotionType(null); setSnapPiece(false);
     setNotice("已经回到起点，重新搭一条修复路线吧");
   }
 
@@ -348,7 +363,7 @@ export default function Home() {
       return;
     }
     const firstStepDelay = isSamePiece(piece, START) ? 300 : 820;
-    setRunning(true); setFeedback(null); setPiece(START); setReviewIndex(null); setResultHeld(false); setMotionType(null); setNotice("小小修复师正在执行指令…");
+    setRunning(true); setFeedback(null); setPiece(START); setVisualPiece(START); setReviewIndex(null); setResultHeld(false); setMotionType(null); setSnapPiece(false); setNotice("小小修复师正在执行指令…");
     let working = START;
     const steps: PieceState[] = [];
     let outOfGridAt = -1;
@@ -376,6 +391,7 @@ export default function Home() {
         if (index === outOfGridAt) {
           const lastVisibleState = index > 0 ? steps[index - 1] : START;
           setPiece(lastVisibleState);
+          setVisualPiece(lastVisibleState);
           setResultHeld(true);
           setRunning(false);
           setNotice(`已停在第 ${index + 1} 条指令出界前，请对照画面修改`);
@@ -387,11 +403,16 @@ export default function Home() {
           return;
         }
         if (command.type === "reflect") {
-          const previous = index > 0 ? steps[index - 1] : START;
-          setPiece({ ...next, matrix: previous.matrix });
-          window.setTimeout(() => setPiece(next), 860);
+          setPiece(next);
+          window.setTimeout(() => {
+            setSnapPiece(true);
+            setVisualPiece(next);
+            setMotionType(null);
+            window.setTimeout(() => setSnapPiece(false), 40);
+          }, 1720);
         } else {
           setPiece(next);
+          setVisualPiece(next);
         }
         if (index === steps.length - 1) {
           window.setTimeout(() => {
@@ -438,7 +459,7 @@ export default function Home() {
     >{value ?? placeholder}</button>;
   }
 
-  const cssMatrix = `matrix(${piece.matrix[0][0]},${piece.matrix[1][0]},${piece.matrix[0][1]},${piece.matrix[1][1]},0,0)`;
+  const cssMatrix = `matrix(${visualPiece.matrix[0][0]},${visualPiece.matrix[1][0]},${visualPiece.matrix[0][1]},${visualPiece.matrix[1][1]},0,0)`;
   const translateDirections: Array<[Direction, string]> = [["up", "↑ 向上"], ["down", "↓ 向下"], ["left", "← 向左"], ["right", "→ 向右"]];
   const rotationDirections: Array<[RotationDirection, string]> = [["cw", "↻ 顺时针"], ["ccw", "↺ 逆时针"]];
 
@@ -456,13 +477,13 @@ export default function Home() {
         <article className="panel board-panel">
           <div className="panel-heading"><span>01</span><div><h2>修复工坊</h2><p>把右上角残片送回 BEAD 方格</p></div><div className="grid-chip">3 × 3</div></div>
           <div className="board-wrap">
-            <div className={`board ${motionType ? `motion-${motionType}` : ""}`} aria-label="3×3 花窗拼图网格，标记十二个点 A、B、C、D、E、F、G、H、M、N、P、O，其中 O 为残片中心">
+            <div className={`board ${motionType ? `motion-${motionType}` : ""} ${snapPiece ? "snap-piece" : ""}`} aria-label="3×3 花窗拼图网格，标记十二个点 A、B、C、D、E、F、G、H、M、N、P、O，其中 O 为残片中心">
               {Array.from({ length: 9 }, (_, index) => <div className="cell" key={index}><span>{index + 1}</span></div>)}
               <WindowQuarter className="fixed q-tr" /><WindowQuarter className="fixed q-bl" /><WindowQuarter className="fixed q-br" />
               <div className="target-slot"><span>缺口</span></div>
               <WindowQuarter className="start-ghost" />
               {axisLine && <svg className="axis-guide" viewBox="0 0 3 3" preserveAspectRatio="none" aria-label={`${selectedAxis} 对称轴`}><line x1={axisLine.x1} y1={axisLine.y1} x2={axisLine.x2} y2={axisLine.y2} /></svg>}
-              <div className="movable-wrap" style={{ left: `${(piece.x - .5) * 33.333}%`, top: `${(piece.y - .5) * 33.333}%`, transform: cssMatrix }} aria-label="四分之一花窗残片"><div key={motionTick} className="piece-flip-face" style={{ "--flip-axis-x": flipAxis.x, "--flip-axis-y": flipAxis.y } as CSSProperties}><WindowQuarter className="movable" movable /></div></div>
+              <div className="movable-wrap" style={{ left: `${(visualPiece.x - .5) * 33.333}%`, top: `${(visualPiece.y - .5) * 33.333}%`, transform: cssMatrix }} aria-label="四分之一花窗残片"><div key={motionTick} className="piece-flip-face" style={{ "--flip-axis-x": flipGeometry.x, "--flip-axis-y": flipGeometry.y, "--hinge-x": `${flipGeometry.originX}%`, "--hinge-y": `${flipGeometry.originY}%` } as CSSProperties}><WindowQuarter className="movable" movable /></div></div>
               {FIXED_POINTS.map(point => <span key={point.name} className="point-label" style={{ left: `${point.x / 3 * 100}%`, top: `${point.y / 3 * 100}%` }}>{point.name}</span>)}
               <span className="point-label point-o" style={{ left: `${piece.x / 3 * 100}%`, top: `${piece.y / 3 * 100}%` }}>O</span>
               {running && <div className="running-glow" />}
